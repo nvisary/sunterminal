@@ -12,22 +12,26 @@ interface OrderBookWidgetProps {
 
 const EXCHANGES = ['bybit', 'binance', 'okx'];
 
-// Tick grouping steps per price magnitude
 function getTickSteps(price: number): number[] {
   if (price > 10000) return [0.1, 0.5, 1, 5, 10, 50, 100];
-  if (price > 1000) return [0.1, 0.5, 1, 5, 10, 50];
+  if (price > 1000) return [0.01, 0.05, 0.1, 0.5, 1, 5, 10];
   if (price > 100) return [0.01, 0.05, 0.1, 0.5, 1, 5];
   if (price > 10) return [0.001, 0.005, 0.01, 0.05, 0.1, 0.5];
   if (price > 1) return [0.0001, 0.001, 0.005, 0.01, 0.05, 0.1];
   return [0.00001, 0.0001, 0.001, 0.01];
 }
 
-// Aggregate levels by tick size
+function roundTick(value: number, tickSize: number): number {
+  const precision = Math.max(0, -Math.floor(Math.log10(tickSize)));
+  const factor = 10 ** precision;
+  return Math.round(value * factor) / factor;
+}
+
 function aggregateLevels(levels: number[][], tickSize: number): Map<number, number> {
   const map = new Map<number, number>();
   for (const [price, vol] of levels) {
     if (price == null || vol == null) continue;
-    const key = Math.round(Math.floor(price / tickSize) * tickSize * 1e8) / 1e8;
+    const key = roundTick(Math.floor(price / tickSize) * tickSize, tickSize);
     map.set(key, (map.get(key) ?? 0) + vol);
   }
   return map;
@@ -40,6 +44,8 @@ interface RecentTrade {
   time: number;
 }
 
+type DomMode = 'static' | 'dynamic';
+
 export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, onChangeExchange }: OrderBookWidgetProps) {
   const key = `${exchange}:${symbol}`;
   const orderbook = useMarketStore((s) => s.orderbooks.get(key));
@@ -47,7 +53,10 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
-  const [tickIdx, setTickIdx] = useState(2); // index into tick steps
+  const [tickIdx, setTickIdx] = useState(0);
+  const [mode, setMode] = useState<DomMode>('dynamic');
+  const [scrollOffset, setScrollOffset] = useState(0); // for static mode: shift in tick steps
+  const [showMenu, setShowMenu] = useState(false);
   const ladderRef = useRef<HTMLDivElement>(null);
   const recentTradesRef = useRef<Map<number, RecentTrade>>(new Map());
 
@@ -59,7 +68,6 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
     return unsub;
   }, [exchange, symbol, key, setOrderbook]);
 
-  // Subscribe to trades for prints on DOM
   useEffect(() => {
     recentTradesRef.current.clear();
     const channel = `trades:${exchange}:${symbol}`;
@@ -67,10 +75,8 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
       const t = data as unknown as RecentTrade;
       if (!t.price) return;
       const map = recentTradesRef.current;
-      // Keep last trade per price level (for display)
       const rounded = Math.round(t.price * 1e4) / 1e4;
       map.set(rounded, { ...t, time: Date.now() });
-      // Cleanup old trades (> 3s)
       const now = Date.now();
       for (const [k, v] of map) {
         if (now - v.time > 3000) map.delete(k);
@@ -79,14 +85,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
     return unsub;
   }, [exchange, symbol]);
 
-  // Mouse wheel = change tick grouping
+  // Scroll = navigate price levels (static) or no-op (dynamic)
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    const bids = orderbook?.bids ?? [];
-    const midP = bids[0]?.[0] ?? 0;
-    const steps = getTickSteps(midP);
-    setTickIdx((prev) => Math.max(0, Math.min(steps.length - 1, prev + (e.deltaY > 0 ? 1 : -1))));
-  }, [orderbook]);
+    if (mode === 'static') {
+      setScrollOffset((prev) => prev + (e.deltaY > 0 ? 3 : -3));
+    }
+    // In dynamic mode scroll does nothing — price follows market
+  }, [mode]);
 
   const doSearch = async (q: string) => {
     if (!q) { setResults([]); return; }
@@ -101,6 +107,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
     setSearch('');
     setResults([]);
     setSearching(false);
+    setScrollOffset(0);
   };
 
   const bids = orderbook?.bids ?? [];
@@ -112,54 +119,67 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const steps = getTickSteps(midPrice);
   const tickSize = steps[Math.min(tickIdx, steps.length - 1)]!;
 
-  // Aggregate raw levels into tick-grouped map
   const aggBids = aggregateLevels(bids, tickSize);
   const aggAsks = aggregateLevels(asks, tickSize);
 
-  // Calculate how many rows fit
   const containerH = ladderRef.current?.clientHeight ?? 400;
   const rowH = 17;
-  const spreadRowH = 22;
+  const spreadRowH = mode === 'static' ? 22 : 0; // dynamic has no spread row
   const totalRows = Math.max(4, Math.floor((containerH - spreadRowH) / rowH));
-  const halfRows = Math.floor(totalRows / 2);
 
-  // Build complete price ladder from best bid/ask outward
-  // Fill every tick step even if volume is 0
   const bestAsk = asks[0]?.[0] ?? 0;
   const bestBid = bids[0]?.[0] ?? 0;
-  const bestAskTick = bestAsk > 0 ? Math.ceil(bestAsk / tickSize) * tickSize : 0;
-  const bestBidTick = bestBid > 0 ? Math.floor(bestBid / tickSize) * tickSize : 0;
-
-  const askDisplay: number[] = [];
-  for (let i = halfRows - 1; i >= 0; i--) {
-    const p = Math.round((bestAskTick + i * tickSize) * 1e8) / 1e8;
-    askDisplay.push(p);
-  }
-
-  const bidDisplay: number[] = [];
-  for (let i = 0; i < halfRows; i++) {
-    const p = Math.round((bestBidTick - i * tickSize) * 1e8) / 1e8;
-    bidDisplay.push(p);
-  }
-
-  const maxVol = Math.max(
-    ...askDisplay.map((p) => aggAsks.get(p) ?? 0),
-    ...bidDisplay.map((p) => aggBids.get(p) ?? 0),
-    0.001
-  );
+  const bestAskTick = bestAsk > 0 ? roundTick(Math.ceil(bestAsk / tickSize) * tickSize, tickSize) : 0;
+  const bestBidTick = bestBid > 0 ? roundTick(Math.floor(bestBid / tickSize) * tickSize, tickSize) : 0;
 
   const dp = tickSize >= 1 ? 0 : tickSize >= 0.1 ? 1 : tickSize >= 0.01 ? 2 : tickSize >= 0.001 ? 3 : 4;
   const baseName = symbol.split('/')[0] ?? symbol;
 
-  // Check if a trade print exists near a price level
+  // Build price rows depending on mode
+  let rows: Array<{ price: number; vol: number; side: 'ask' | 'bid' | 'spread' }> = [];
+
+  if (mode === 'dynamic') {
+    // Dynamic: single continuous ladder centered on mid price, moves with market
+    const centerTick = roundTick(Math.round(midPrice / tickSize) * tickSize, tickSize);
+    const offset = scrollOffset; // allow slight manual shift too
+    for (let i = Math.floor(totalRows / 2); i >= -Math.ceil(totalRows / 2); i--) {
+      const p = roundTick(centerTick + (i + offset) * tickSize, tickSize);
+      const askVol = aggAsks.get(p) ?? 0;
+      const bidVol = aggBids.get(p) ?? 0;
+      if (askVol > 0 && bidVol > 0) {
+        rows.push({ price: p, vol: askVol, side: 'ask' }); // overlap — show ask
+      } else if (askVol > 0) {
+        rows.push({ price: p, vol: askVol, side: 'ask' });
+      } else if (bidVol > 0) {
+        rows.push({ price: p, vol: bidVol, side: 'bid' });
+      } else {
+        // Empty level — determine side by position relative to mid
+        rows.push({ price: p, vol: 0, side: p >= bestAskTick ? 'ask' : 'bid' });
+      }
+    }
+  } else {
+    // Static: split view with spread in middle
+    const halfRows = Math.floor(totalRows / 2);
+    const askRows: typeof rows = [];
+    for (let i = halfRows - 1; i >= 0; i--) {
+      const p = roundTick(bestAskTick + (i + scrollOffset) * tickSize, tickSize);
+      askRows.push({ price: p, vol: aggAsks.get(p) ?? 0, side: 'ask' });
+    }
+    const bidRows: typeof rows = [];
+    for (let i = 0; i < halfRows; i++) {
+      const p = roundTick(bestBidTick - (i + scrollOffset) * tickSize, tickSize);
+      bidRows.push({ price: p, vol: aggBids.get(p) ?? 0, side: 'bid' });
+    }
+    rows = [...askRows, { price: 0, vol: 0, side: 'spread' }, ...bidRows];
+  }
+
+  const maxVol = Math.max(...rows.filter((r) => r.side !== 'spread').map((r) => r.vol), 0.001);
+
   const getTradePrint = (price: number): RecentTrade | null => {
     const map = recentTradesRef.current;
     const now = Date.now();
-    // Find trade within tick range
     for (const [tp, trade] of map) {
-      if (Math.abs(tp - price) <= tickSize && now - trade.time < 3000) {
-        return trade;
-      }
+      if (Math.abs(tp - price) <= tickSize * 0.6 && now - trade.time < 3000) return trade;
     }
     return null;
   };
@@ -214,11 +234,48 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
               <span className="text-[10px] text-gray-600 ml-1">{exchange}</span>
             </button>
             <div className="flex-1" />
-            {/* Tick size indicator */}
-            <span className="text-[9px] text-gray-600 font-mono" title="Scroll to change tick grouping">
-              tick {tickSize}
-            </span>
-            <span className="text-[10px] text-gray-500 font-mono ml-1">
+            {/* Settings menu button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowMenu(!showMenu)}
+                className={`text-[10px] px-1.5 py-0.5 rounded ${showMenu ? 'text-gray-200 bg-[#1e1e2e]' : 'text-gray-600 hover:text-gray-400'}`}
+              >&#9881;</button>
+              {showMenu && (
+                <div className="absolute top-full right-0 mt-1 w-48 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50 p-2 space-y-2"
+                  onMouseLeave={() => setShowMenu(false)}
+                >
+                  {/* Mode toggle */}
+                  <div>
+                    <div className="text-[9px] text-gray-500 uppercase mb-1">Mode</div>
+                    <div className="flex gap-1">
+                      {(['dynamic', 'static'] as DomMode[]).map((m) => (
+                        <button key={m} onClick={() => { setMode(m); setScrollOffset(0); }}
+                          className={`flex-1 px-2 py-1 text-[10px] rounded ${mode === m ? 'bg-[#2a2a4a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                        >{m === 'dynamic' ? 'Dynamic' : 'Static'}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Tick grouping */}
+                  <div>
+                    <div className="text-[9px] text-gray-500 uppercase mb-1">Tick Size</div>
+                    <div className="flex flex-wrap gap-1">
+                      {steps.map((s, i) => (
+                        <button key={s} onClick={() => setTickIdx(i)}
+                          className={`px-1.5 py-0.5 text-[10px] rounded ${tickIdx === i ? 'bg-[#2a2a4a] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                        >{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {mode === 'static' && scrollOffset !== 0 && (
+                    <button onClick={() => setScrollOffset(0)}
+                      className="w-full text-[10px] text-gray-500 hover:text-gray-300 py-0.5"
+                    >Center on market</button>
+                  )}
+                </div>
+              )}
+            </div>
+            <span className="text-[9px] text-gray-600 font-mono">{tickSize}</span>
+            <span className="text-[10px] text-gray-500 font-mono ml-0.5">
               {midPrice > 0 ? midPrice.toFixed(dp) : '—'}
             </span>
           </>
@@ -227,79 +284,64 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
 
       {/* DOM Ladder */}
       <div ref={ladderRef} className="flex-1 overflow-hidden flex flex-col font-mono text-[11px] leading-none select-none">
-        {/* Asks (lowest at bottom) */}
-        <div className="flex-1 flex flex-col justify-end overflow-hidden">
-          {askDisplay.map((price) => {
-            const vol = aggAsks.get(price) ?? 0;
-            const pct = (vol / maxVol) * 100;
-            const trade = getTradePrint(price);
+        {rows.map((row, i) => {
+          if (row.side === 'spread') {
             return (
-              <div key={`a${price}`} className="flex items-center relative group" style={{ height: rowH }}>
-                {/* Volume bar */}
-                <div className="absolute inset-y-0 left-0 bg-red-500/15 transition-all duration-75"
-                  style={{ width: `${pct}%` }} />
-                {/* Trade print */}
-                {trade && (
-                  <div className={`absolute left-0.5 top-1/2 -translate-y-1/2 rounded-full z-20 ${
-                    trade.side === 'buy' ? 'bg-green-400' : 'bg-red-400'
-                  }`} style={{ width: Math.max(4, Math.min(12, Math.sqrt(trade.amount) * 4)), height: Math.max(4, Math.min(12, Math.sqrt(trade.amount) * 4)) }} />
-                )}
-                {/* Volume */}
-                <span className="w-[35%] text-right pr-1.5 text-red-400/50 relative z-10 tabular-nums">
-                  {vol > 0 ? vol.toFixed(vol > 100 ? 0 : 3) : ''}
-                </span>
-                {/* Price */}
-                <span className="w-[30%] text-center text-red-300 relative z-10 tabular-nums">
-                  {price.toFixed(dp)}
-                </span>
-                {/* Empty bid side */}
-                <span className="w-[35%] relative z-10" />
+              <div key="spread" className="flex items-center justify-center border-y border-[#1e1e2e] bg-[#08080e] shrink-0" style={{ height: spreadRowH }}>
+                {bestBid > 0 && bestAsk > 0 ? (
+                  <span className="text-[10px]">
+                    <span className="text-yellow-500/80 font-bold">{(bestAsk - bestBid).toFixed(dp)}</span>
+                    <span className="text-gray-600 ml-1">({((bestAsk - bestBid) / bestBid * 100).toFixed(3)}%)</span>
+                  </span>
+                ) : <span className="text-[10px] text-gray-600">—</span>}
               </div>
             );
-          })}
-        </div>
+          }
 
-        {/* Spread */}
-        <div className="flex items-center justify-center border-y border-[#1e1e2e] bg-[#08080e] shrink-0" style={{ height: spreadRowH }}>
-          {bids[0]?.[0] && asks[0]?.[0] ? (
-            <span className="text-[10px]">
-              <span className="text-yellow-500/80 font-bold">{(asks[0][0] - bids[0][0]).toFixed(dp)}</span>
-              <span className="text-gray-600 ml-1">({((asks[0][0] - bids[0][0]) / bids[0][0] * 100).toFixed(3)}%)</span>
-            </span>
-          ) : <span className="text-[10px] text-gray-600">—</span>}
-        </div>
+          const isAsk = row.side === 'ask';
+          const pct = (row.vol / maxVol) * 100;
+          const trade = getTradePrint(row.price);
+          const isBestBid = Math.abs(row.price - bestBidTick) < tickSize * 0.5;
+          const isBestAsk = Math.abs(row.price - bestAskTick) < tickSize * 0.5;
+          const highlight = (isBestBid || isBestAsk) ? 'bg-white/[0.03]' : '';
 
-        {/* Bids */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {bidDisplay.map((price) => {
-            const vol = aggBids.get(price) ?? 0;
-            const pct = (vol / maxVol) * 100;
-            const trade = getTradePrint(price);
-            return (
-              <div key={`b${price}`} className="flex items-center relative group" style={{ height: rowH }}>
-                {/* Volume bar (from right) */}
-                <div className="absolute inset-y-0 right-0 bg-green-500/15 transition-all duration-75"
-                  style={{ width: `${pct}%` }} />
-                {/* Empty ask side */}
-                <span className="w-[35%] relative z-10" />
-                {/* Price */}
-                <span className="w-[30%] text-center text-green-300 relative z-10 tabular-nums">
-                  {price.toFixed(dp)}
-                </span>
-                {/* Volume */}
-                <span className="w-[35%] pl-1.5 text-green-400/50 relative z-10 tabular-nums">
-                  {vol > 0 ? vol.toFixed(vol > 100 ? 0 : 3) : ''}
-                </span>
-                {/* Trade print */}
-                {trade && (
-                  <div className={`absolute right-0.5 top-1/2 -translate-y-1/2 rounded-full z-20 ${
-                    trade.side === 'buy' ? 'bg-green-400' : 'bg-red-400'
-                  }`} style={{ width: Math.max(4, Math.min(12, Math.sqrt(trade.amount) * 4)), height: Math.max(4, Math.min(12, Math.sqrt(trade.amount) * 4)) }} />
-                )}
-              </div>
-            );
-          })}
-        </div>
+          return (
+            <div key={`${row.side}${i}`} className={`flex items-center relative ${highlight}`} style={{ height: rowH }}>
+              {/* Volume bar */}
+              <div
+                className={`absolute inset-y-0 ${isAsk ? 'left-0 bg-red-500/15' : 'right-0 bg-green-500/15'}`}
+                style={{ width: `${pct}%` }}
+              />
+              {/* Trade print */}
+              {trade && (
+                <div className={`absolute ${isAsk ? 'left-0.5' : 'right-0.5'} top-1/2 -translate-y-1/2 rounded-full z-20 ${
+                  trade.side === 'buy' ? 'bg-green-400' : 'bg-red-400'
+                }`} style={{
+                  width: Math.max(4, Math.min(14, Math.sqrt(trade.amount) * 4)),
+                  height: Math.max(4, Math.min(14, Math.sqrt(trade.amount) * 4)),
+                }} />
+              )}
+              {/* Ask volume */}
+              <span className="w-[35%] text-right pr-1.5 relative z-10 tabular-nums" style={{
+                color: isAsk && row.vol > 0 ? 'rgba(248,113,113,0.5)' : 'transparent',
+              }}>
+                {isAsk && row.vol > 0 ? row.vol.toFixed(row.vol > 100 ? 0 : 3) : ''}
+              </span>
+              {/* Price */}
+              <span className={`w-[30%] text-center relative z-10 tabular-nums ${
+                isAsk ? 'text-red-300' : 'text-green-300'
+              } ${(isBestBid || isBestAsk) ? 'font-bold' : ''}`}>
+                {row.price.toFixed(dp)}
+              </span>
+              {/* Bid volume */}
+              <span className="w-[35%] pl-1.5 relative z-10 tabular-nums" style={{
+                color: !isAsk && row.vol > 0 ? 'rgba(74,222,128,0.5)' : 'transparent',
+              }}>
+                {!isAsk && row.vol > 0 ? row.vol.toFixed(row.vol > 100 ? 0 : 3) : ''}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
