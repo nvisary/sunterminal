@@ -13,7 +13,8 @@ export interface WidgetConfig {
 export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; defaultH: number; minW?: number; minH?: number }> = {
   orderbook: { title: 'Order Book', defaultW: 4, defaultH: 8, minW: 3, minH: 4 },
   trades: { title: 'Trades', defaultW: 3, defaultH: 6, minW: 2, minH: 3 },
-  chart: { title: 'Price Chart', defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+  chart: { title: 'Sparkline', defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+  candleChart: { title: 'Candle Chart', defaultW: 6, defaultH: 7, minW: 4, minH: 5 },
   tradeForm: { title: 'Trade Form', defaultW: 3, defaultH: 5, minW: 2, minH: 3 },
   drawdown: { title: 'Drawdown', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
   exposure: { title: 'Exposure', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },

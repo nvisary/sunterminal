@@ -9,6 +9,7 @@ import { DrawdownWidget } from '../widgets/DrawdownWidget';
 import { ExposureWidget } from '../widgets/ExposureWidget';
 import { AlertsWidget } from '../widgets/AlertsWidget';
 import { HedgeWidget } from '../widgets/HedgeWidget';
+import { CandleChartWidget } from '../widgets/CandleChartWidget';
 import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
 import type { WidgetConfig, Layout } from '../stores/layout.store';
@@ -56,6 +57,8 @@ function renderWidget(widget: WidgetConfig, panels: ReturnType<typeof usePanelsS
       );
     case 'chart':
       return <PriceChartWidget exchange={panel.exchange} symbol={panel.symbol} />;
+    case 'candleChart':
+      return <CandleChartWidget defaultExchange={active?.exchange} defaultSymbol={active?.symbol} />;
     case 'trades':
       return <TradesWidget exchange={active?.exchange ?? ''} symbol={active?.symbol ?? ''} />;
     case 'tradeForm':

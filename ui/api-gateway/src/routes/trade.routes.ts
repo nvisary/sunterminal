@@ -53,6 +53,50 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // GET /api/candles/:exchange/:symbol?tf=1h&limit=300 — fetch OHLCV via REST command
+    const candlesMatch = path.match(/^\/api\/candles\/([^/]+)\/(.+)$/);
+    if (candlesMatch && method === "GET") {
+      const exchange = candlesMatch[1]!;
+      const symbol = decodeURIComponent(candlesMatch[2]!);
+      const tf = url?.searchParams.get("tf") ?? "1h";
+      const limit = Number(url?.searchParams.get("limit") ?? "300");
+
+      const { randomUUID } = await import("node:crypto");
+      const reqId = randomUUID();
+      const replyTo = `ml:rest-response:${reqId}`;
+
+      await redis.xadd("cmd:rest-request", "MAXLEN", "~", "1000", "*",
+        "data", JSON.stringify({ method: "fetchOHLCV", exchange, args: [symbol, tf, undefined, limit], replyTo }));
+
+      // Poll for response
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const result = await redis.xrevrange(replyTo, "+", "-", "COUNT", 1);
+        if (result.length > 0) {
+          await redis.del(replyTo);
+          const fields = result[0]![1];
+          const dataIdx = fields.indexOf("data");
+          if (dataIdx !== -1 && fields[dataIdx + 1]) {
+            const parsed = JSON.parse(fields[dataIdx + 1]!) as { success: boolean; data: unknown };
+            if (parsed.success && Array.isArray(parsed.data)) {
+              // OHLCV format: [[timestamp, open, high, low, close, volume], ...]
+              const candles = (parsed.data as number[][]).map((c) => ({
+                time: c[0], open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5],
+              }));
+              json(res, 200, candles);
+              return true;
+            }
+          }
+          json(res, 502, { error: "Failed to fetch candles" });
+          return true;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      await redis.del(replyTo);
+      json(res, 504, { error: "Candle fetch timeout" });
+      return true;
+    }
+
     // GET /api/markets/:exchange — list available swap symbols
     const marketsMatch = path.match(/^\/api\/markets\/([^/]+)$/);
     if (marketsMatch && method === "GET") {
