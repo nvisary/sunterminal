@@ -21,18 +21,11 @@ function WidgetWrapper({ widget, onRemove, children }: {
 }) {
   return (
     <div className="h-full flex flex-col bg-[#0c0c14] rounded border border-[#1a1a2a] overflow-hidden">
-      {/* Drag handle */}
       <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
         <span className="text-[10px] text-gray-500 flex-1 truncate">{widget.title}</span>
-        <button
-          onClick={onRemove}
-          className="text-[10px] text-gray-700 hover:text-red-400 px-1"
-          title="Close widget"
-        >x</button>
+        <button onClick={onRemove} className="text-[10px] text-gray-700 hover:text-red-400 px-1" title="Close widget">x</button>
       </div>
-      <div className="flex-1 overflow-hidden">
-        {children}
-      </div>
+      <div className="flex-1 overflow-hidden">{children}</div>
     </div>
   );
 }
@@ -41,15 +34,13 @@ function renderWidget(widget: WidgetConfig, panels: ReturnType<typeof usePanelsS
   const active = panels[activePanel] ?? panels[0];
   const panelIdx = (widget.props?.panelIndex as number) ?? activePanel;
   const panel = panels[panelIdx] ?? active;
-
   if (!panel) return <div className="text-gray-600 text-xs p-2">No data</div>;
 
   switch (widget.type) {
     case 'orderbook':
       return (
         <OrderBookWidget
-          exchange={panel.exchange}
-          symbol={panel.symbol}
+          exchange={panel.exchange} symbol={panel.symbol}
           isActive={panelIdx === activePanel}
           onChangeSymbol={(sym) => updatePanel(panelIdx, { symbol: sym })}
           onChangeExchange={(ex) => updatePanel(panelIdx, { exchange: ex })}
@@ -72,15 +63,18 @@ function renderWidget(widget: WidgetConfig, panels: ReturnType<typeof usePanelsS
     case 'hedge':
       return <HedgeWidget />;
     default:
-      return <div className="text-gray-600 text-xs p-2">Unknown widget: {widget.type}</div>;
+      return <div className="text-gray-600 text-xs p-2">Unknown: {widget.type}</div>;
   }
 }
 
 export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
   const { panels, activePanel, setActivePanel, addPanel, removePanel: removePanelStore } = usePanelsStore();
   const updatePanel = usePanelsStore((s) => s.updatePanel);
-  const { widgets, layout, setLayout, addWidget, removeWidget, resetLayout } = useLayoutStore();
+  const store = useLayoutStore();
+  const pane = store.activePane();
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [renamingPane, setRenamingPane] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const active = panels[activePanel] ?? panels[0]!;
 
@@ -98,96 +92,129 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
   }, []);
 
   const onLayoutChange = useCallback((newLayout: Layout) => {
-    setLayout(newLayout);
-  }, [setLayout]);
+    store.setLayout(newLayout);
+  }, [store]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Top bar */}
-      <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d14] border-b border-[#1e1e2e] shrink-0">
+      <div className="flex items-center gap-1.5 px-2 py-1 bg-[#0d0d14] border-b border-[#1e1e2e] shrink-0 overflow-x-auto">
         <span className="text-sm font-bold text-white shrink-0">SunTerminal</span>
-        <span className="text-xs text-gray-600 shrink-0">|</span>
+        <span className="text-gray-700 shrink-0">|</span>
 
-        {/* Panel tabs */}
-        <div className="flex gap-1 shrink-0">
+        {/* Pane tabs */}
+        <div className="flex gap-0.5 shrink-0">
+          {store.panes.map((p) => (
+            <div key={p.id} className="flex items-center">
+              {renamingPane === p.id ? (
+                <input
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { store.renamePane(p.id, renameValue); setRenamingPane(null); }
+                    if (e.key === 'Escape') setRenamingPane(null);
+                  }}
+                  onBlur={() => { store.renamePane(p.id, renameValue); setRenamingPane(null); }}
+                  className="w-16 bg-[#0a0a14] border border-[#4a4a6a] rounded px-1 py-0.5 text-[10px] text-white outline-none"
+                />
+              ) : (
+                <button
+                  onClick={() => store.setActivePane(p.id)}
+                  onDoubleClick={() => { setRenamingPane(p.id); setRenameValue(p.name); }}
+                  className={`px-2 py-0.5 rounded-l text-[10px] transition-colors ${
+                    p.id === store.activePaneId
+                      ? 'bg-[#1e1e3e] text-white border border-[#3a3a5a]'
+                      : 'text-gray-500 hover:text-gray-300 border border-transparent hover:border-[#2a2a3a]'
+                  }`}
+                  title="Double-click to rename"
+                >
+                  {p.name}
+                </button>
+              )}
+              {store.panes.length > 1 && p.id === store.activePaneId && (
+                <button
+                  onClick={() => store.removePane(p.id)}
+                  className="text-[9px] text-gray-700 hover:text-red-400 px-0.5 -ml-px"
+                >x</button>
+              )}
+            </div>
+          ))}
+          <button
+            onClick={() => store.addPane(`Pane ${store.panes.length + 1}`)}
+            className="px-1.5 py-0.5 rounded text-[10px] text-gray-600 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700"
+          >+</button>
+        </div>
+
+        <span className="text-gray-700 shrink-0">|</span>
+
+        {/* Symbol panel tabs */}
+        <div className="flex gap-0.5 shrink-0">
           {panels.map((p, i) => (
-            <button
-              key={i}
-              onClick={() => setActivePanel(i)}
-              className={`px-2 py-0.5 rounded text-xs transition-colors ${
-                i === activePanel
-                  ? 'bg-[#1e1e3e] text-white border border-[#3a3a5a]'
-                  : 'text-gray-500 hover:text-gray-300 border border-transparent'
+            <button key={i} onClick={() => setActivePanel(i)}
+              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                i === activePanel ? 'bg-[#1a1a3a] text-gray-200 border border-[#3a3a5a]' : 'text-gray-600 hover:text-gray-400 border border-transparent'
               }`}
             >
               {p.symbol.split('/')[0]}
               {panels.length > 1 && (
                 <span onClick={(e) => { e.stopPropagation(); removePanelStore(i); }}
-                  className="ml-1 text-gray-600 hover:text-red-400 cursor-pointer"
-                >x</span>
+                  className="ml-0.5 text-gray-700 hover:text-red-400">x</span>
               )}
             </button>
           ))}
           <button
             onClick={() => addPanel('SOL/USDT:USDT', active.exchange)}
-            className="px-2 py-0.5 rounded text-xs text-gray-600 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700"
-          >+</button>
+            className="px-1 py-0.5 rounded text-[10px] text-gray-600 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700"
+          >+sym</button>
         </div>
 
-        <span className="text-xs text-gray-600 shrink-0">|</span>
+        <span className="text-gray-700 shrink-0">|</span>
 
-        {/* Add widget menu */}
-        <div className="relative">
-          <button
-            onClick={() => setShowAddMenu(!showAddMenu)}
-            className="px-2 py-0.5 rounded text-xs text-gray-500 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700"
-          >+ Widget</button>
+        {/* Add widget */}
+        <div className="relative shrink-0">
+          <button onClick={() => setShowAddMenu(!showAddMenu)}
+            className="px-1.5 py-0.5 rounded text-[10px] text-gray-500 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700"
+          >+widget</button>
           {showAddMenu && (
-            <div
-              className="absolute top-full left-0 mt-1 w-44 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50"
-              onMouseLeave={() => setShowAddMenu(false)}
-            >
+            <div className="absolute top-full left-0 mt-1 w-40 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50"
+              onMouseLeave={() => setShowAddMenu(false)}>
               {Object.entries(WIDGET_REGISTRY).map(([type, reg]) => (
-                <button
-                  key={type}
-                  onClick={() => { addWidget(type); setShowAddMenu(false); }}
+                <button key={type} onClick={() => { store.addWidget(type); setShowAddMenu(false); }}
                   className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white"
-                >
-                  {reg.title}
-                </button>
+                >{reg.title}</button>
               ))}
             </div>
           )}
         </div>
 
-        <button
-          onClick={resetLayout}
-          className="px-2 py-0.5 rounded text-[10px] text-gray-600 hover:text-gray-400 border border-[#2a2a3a]"
-          title="Reset to default layout"
+        <button onClick={store.resetLayout}
+          className="px-1.5 py-0.5 rounded text-[9px] text-gray-600 hover:text-gray-400 border border-[#2a2a3a] shrink-0"
         >Reset</button>
 
         <div className="flex-1" />
         {onOpenLogs && (
           <button onClick={onOpenLogs}
-            className="px-2 py-0.5 rounded text-xs text-gray-500 hover:text-gray-200 border border-[#2a2a3a] hover:border-[#4a4a6a] shrink-0"
+            className="px-2 py-0.5 rounded text-[10px] text-gray-500 hover:text-gray-200 border border-[#2a2a3a] shrink-0"
           >Logs</button>
         )}
-        <span className="text-xs text-gray-600 shrink-0">Ctrl+L: logs</span>
+        <span className="text-[10px] text-gray-600 shrink-0">Ctrl+L</span>
       </div>
 
-      {/* DnD Grid */}
+      {/* DnD Grid for active pane */}
       <div ref={containerRef} className="flex-1 overflow-auto">
         <GridLayout
-          layout={layout as Layout}
+          key={pane.id}
+          layout={pane.layout as Layout}
           width={containerWidth}
           gridConfig={{ cols: 12, rowHeight: 40, margin: [4, 4], containerPadding: [4, 4], maxRows: Infinity }}
           dragConfig={{ enabled: true, handle: '.drag-handle', bounded: false, threshold: 3 }}
           onLayoutChange={onLayoutChange}
           compactor={verticalCompactor}
         >
-          {widgets.map((widget) => (
+          {pane.widgets.map((widget) => (
             <div key={widget.id}>
-              <WidgetWrapper widget={widget} onRemove={() => removeWidget(widget.id)}>
+              <WidgetWrapper widget={widget} onRemove={() => store.removeWidget(widget.id)}>
                 {renderWidget(widget, panels, activePanel, updatePanel)}
               </WidgetWrapper>
             </div>
