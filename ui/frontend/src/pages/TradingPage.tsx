@@ -70,7 +70,7 @@ function WidgetWrapper({ widget, onRemove, children }: {
   const borderColor = SYNC_GROUPS.find((g) => g.id === groupId)?.color;
 
   return (
-    <div className="h-full flex flex-col bg-[#0c0c14] rounded border overflow-hidden"
+    <div className="h-full flex flex-col bg-[#0c0c14] rounded border"
       style={{ borderColor: borderColor ?? '#1a1a2a' }}
     >
       <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
