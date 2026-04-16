@@ -12,16 +12,69 @@ import { HedgeWidget } from '../widgets/HedgeWidget';
 import { CandleChartWidget } from '../widgets/CandleChartWidget';
 import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
+import { useSyncStore, SYNC_GROUPS } from '../stores/sync.store';
 import type { WidgetConfig, Layout } from '../stores/layout.store';
+
+function SyncDot({ widgetId }: { widgetId: string }) {
+  const groupId = useSyncStore((s) => s.assignments[widgetId] ?? null);
+  const setGroup = useSyncStore((s) => s.setWidgetGroup);
+  const [open, setOpen] = useState(false);
+
+  const currentGroup = SYNC_GROUPS.find((g) => g.id === groupId);
+  const dotColor = currentGroup?.color ?? '#333';
+
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="w-3 h-3 rounded-full border border-gray-700 hover:border-gray-500 shrink-0"
+        style={{ backgroundColor: dotColor }}
+        title={currentGroup ? `Group: ${currentGroup.label}` : 'No sync group (click to assign)'}
+      />
+      {open && (
+        <div
+          className="absolute top-full right-0 mt-1 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50 p-1.5 flex flex-col gap-1"
+          onMouseLeave={() => setOpen(false)}
+        >
+          <button
+            onClick={() => { setGroup(widgetId, null); setOpen(false); }}
+            className="flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white rounded hover:bg-[#1e1e2e]"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-gray-700 border border-gray-600" />
+            None
+          </button>
+          {SYNC_GROUPS.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => { setGroup(widgetId, g.id); setOpen(false); }}
+              className={`flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] rounded hover:bg-[#1e1e2e] ${
+                groupId === g.id ? 'text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: g.color }} />
+              {g.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function WidgetWrapper({ widget, onRemove, children }: {
   widget: WidgetConfig;
   onRemove: () => void;
   children: React.ReactNode;
 }) {
+  const groupId = useSyncStore((s) => s.assignments[widget.id] ?? null);
+  const borderColor = SYNC_GROUPS.find((g) => g.id === groupId)?.color;
+
   return (
-    <div className="h-full flex flex-col bg-[#0c0c14] rounded border border-[#1a1a2a] overflow-hidden">
+    <div className="h-full flex flex-col bg-[#0c0c14] rounded border overflow-hidden"
+      style={{ borderColor: borderColor ?? '#1a1a2a' }}
+    >
       <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
+        <SyncDot widgetId={widget.id} />
         <span className="text-[10px] text-gray-500 flex-1 truncate">{widget.title}</span>
         <button onClick={onRemove} className="text-[10px] text-gray-700 hover:text-red-400 px-1" title="Close widget">x</button>
       </div>
@@ -30,30 +83,61 @@ function WidgetWrapper({ widget, onRemove, children }: {
   );
 }
 
-function renderWidget(widget: WidgetConfig, panels: ReturnType<typeof usePanelsStore.getState>['panels'], activePanel: number, updatePanel: ReturnType<typeof usePanelsStore.getState>['updatePanel']) {
+// Widgets that respond to symbol sync
+const SYMBOL_WIDGETS = new Set(['orderbook', 'chart', 'candleChart', 'trades', 'tradeForm']);
+
+function WidgetContent({ widget }: { widget: WidgetConfig }) {
+  const panels = usePanelsStore((s) => s.panels);
+  const activePanel = usePanelsStore((s) => s.activePanel);
+  const updatePanel = usePanelsStore((s) => s.updatePanel);
+  const getWidgetSymbol = useSyncStore((s) => s.getWidgetSymbol);
+  const setGroupSymbol = useSyncStore((s) => s.setGroupSymbol);
+  const groupId = useSyncStore((s) => s.assignments[widget.id] ?? null);
+
   const active = panels[activePanel] ?? panels[0];
   const panelIdx = (widget.props?.panelIndex as number) ?? activePanel;
   const panel = panels[panelIdx] ?? active;
   if (!panel) return <div className="text-gray-600 text-xs p-2">No data</div>;
 
+  // If widget is in a sync group, use group's symbol; otherwise use panel's
+  const resolved = SYMBOL_WIDGETS.has(widget.type)
+    ? getWidgetSymbol(widget.id, panel.exchange, panel.symbol)
+    : { exchange: panel.exchange, symbol: panel.symbol };
+
+  const onChangeSymbol = (sym: string) => {
+    if (groupId) {
+      setGroupSymbol(groupId, resolved.exchange, sym);
+    } else {
+      updatePanel(panelIdx, { symbol: sym });
+    }
+  };
+
+  const onChangeExchange = (ex: string) => {
+    if (groupId) {
+      setGroupSymbol(groupId, ex, resolved.symbol);
+    } else {
+      updatePanel(panelIdx, { exchange: ex });
+    }
+  };
+
   switch (widget.type) {
     case 'orderbook':
       return (
         <OrderBookWidget
-          exchange={panel.exchange} symbol={panel.symbol}
+          exchange={resolved.exchange} symbol={resolved.symbol}
           isActive={panelIdx === activePanel}
-          onChangeSymbol={(sym) => updatePanel(panelIdx, { symbol: sym })}
-          onChangeExchange={(ex) => updatePanel(panelIdx, { exchange: ex })}
+          onChangeSymbol={onChangeSymbol}
+          onChangeExchange={onChangeExchange}
         />
       );
     case 'chart':
-      return <PriceChartWidget exchange={panel.exchange} symbol={panel.symbol} />;
+      return <PriceChartWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'candleChart':
-      return <CandleChartWidget defaultExchange={active?.exchange} defaultSymbol={active?.symbol} />;
+      return <CandleChartWidget defaultExchange={resolved.exchange} defaultSymbol={resolved.symbol} />;
     case 'trades':
-      return <TradesWidget exchange={active?.exchange ?? ''} symbol={active?.symbol ?? ''} />;
+      return <TradesWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'tradeForm':
-      return <TradeFormWidget exchange={active?.exchange ?? ''} symbol={active?.symbol ?? ''} />;
+      return <TradeFormWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'drawdown':
       return <DrawdownWidget />;
     case 'exposure':
@@ -69,7 +153,6 @@ function renderWidget(widget: WidgetConfig, panels: ReturnType<typeof usePanelsS
 
 export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
   const { panels, activePanel, setActivePanel, addPanel, removePanel: removePanelStore } = usePanelsStore();
-  const updatePanel = usePanelsStore((s) => s.updatePanel);
   const store = useLayoutStore();
   const pane = store.activePane();
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -215,7 +298,7 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
           {pane.widgets.map((widget) => (
             <div key={widget.id}>
               <WidgetWrapper widget={widget} onRemove={() => store.removeWidget(widget.id)}>
-                {renderWidget(widget, panels, activePanel, updatePanel)}
+                <WidgetContent widget={widget} />
               </WidgetWrapper>
             </div>
           ))}
