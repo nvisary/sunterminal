@@ -1,4 +1,5 @@
 import { OrderBookWidget } from '../widgets/OrderBookWidget';
+import { PriceChartWidget } from '../widgets/PriceChartWidget';
 import { TradesWidget } from '../widgets/TradesWidget';
 import { TradeFormWidget } from '../widgets/TradeFormWidget';
 import { DrawdownWidget } from '../widgets/DrawdownWidget';
@@ -54,9 +55,9 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
         <span className="text-xs text-gray-600 shrink-0">Ctrl+L: logs | Ctrl+Shift+K: emergency</span>
       </div>
 
-      {/* Order books */}
-      <div className="col-span-8 row-span-1 overflow-hidden">
-        <div className="h-full grid gap-2" style={{
+      {/* Order books + charts */}
+      <div className="col-span-8 row-span-1 overflow-hidden flex flex-col gap-2">
+        <div className="flex-1 grid gap-2 min-h-0" style={{
           gridTemplateColumns: `repeat(${Math.min(panels.length, 4)}, 1fr)`,
         }}>
           {panels.map((p, i) => (
@@ -69,6 +70,14 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
                 onChangeExchange={(ex) => updatePanel(i, { exchange: ex })}
               />
             </div>
+          ))}
+        </div>
+        {/* Price charts under orderbooks */}
+        <div className="grid gap-2 shrink-0" style={{
+          gridTemplateColumns: `repeat(${Math.min(panels.length, 4)}, 1fr)`,
+        }}>
+          {panels.map((p, i) => (
+            <PriceChartWidget key={`chart-${i}`} exchange={p.exchange} symbol={p.symbol} />
           ))}
         </div>
       </div>
