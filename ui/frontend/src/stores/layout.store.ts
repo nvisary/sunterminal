@@ -149,9 +149,8 @@ export const useLayoutStore = create<LayoutStore>()(
 
       addPane: (name) => {
         const id = `pane_${++counter}`;
-        const pane = makeDefaultPane(id, name);
         set((s) => ({
-          panes: [...s.panes, pane],
+          panes: [...s.panes, { id, name, widgets: [], layout: [] }],
           activePaneId: id,
         }));
       },
