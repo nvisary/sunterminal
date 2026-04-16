@@ -112,7 +112,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const steps = getTickSteps(midPrice);
   const tickSize = steps[Math.min(tickIdx, steps.length - 1)]!;
 
-  // Aggregate
+  // Aggregate raw levels into tick-grouped map
   const aggBids = aggregateLevels(bids, tickSize);
   const aggAsks = aggregateLevels(asks, tickSize);
 
@@ -123,15 +123,27 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const totalRows = Math.max(4, Math.floor((containerH - spreadRowH) / rowH));
   const halfRows = Math.floor(totalRows / 2);
 
-  // Sort and take
-  const askPrices = [...aggAsks.keys()].sort((a, b) => a - b).slice(0, halfRows);
-  const bidPrices = [...aggBids.keys()].sort((a, b) => b - a).slice(0, halfRows);
+  // Build complete price ladder from best bid/ask outward
+  // Fill every tick step even if volume is 0
+  const bestAsk = asks[0]?.[0] ?? 0;
+  const bestBid = bids[0]?.[0] ?? 0;
+  const bestAskTick = bestAsk > 0 ? Math.ceil(bestAsk / tickSize) * tickSize : 0;
+  const bestBidTick = bestBid > 0 ? Math.floor(bestBid / tickSize) * tickSize : 0;
 
-  const askDisplay = askPrices.reverse(); // show lowest ask at bottom
-  const bidDisplay = bidPrices;
+  const askDisplay: number[] = [];
+  for (let i = halfRows - 1; i >= 0; i--) {
+    const p = Math.round((bestAskTick + i * tickSize) * 1e8) / 1e8;
+    askDisplay.push(p);
+  }
+
+  const bidDisplay: number[] = [];
+  for (let i = 0; i < halfRows; i++) {
+    const p = Math.round((bestBidTick - i * tickSize) * 1e8) / 1e8;
+    bidDisplay.push(p);
+  }
 
   const maxVol = Math.max(
-    ...askPrices.map((p) => aggAsks.get(p) ?? 0),
+    ...askDisplay.map((p) => aggAsks.get(p) ?? 0),
     ...bidDisplay.map((p) => aggBids.get(p) ?? 0),
     0.001
   );
