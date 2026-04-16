@@ -7,7 +7,7 @@ class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string;
 
-  constructor(url: string = `ws://${window.location.host}/ws`) {
+  constructor(url: string = WsClient.resolveUrl()) {
     this.url = url;
   }
 
@@ -93,6 +93,24 @@ class WsClient {
       this.connect();
     }, 2000);
   }
+
+  static resolveUrl(): string {
+    const host = window.location.host;
+    // In Tauri or file:// — connect to gateway directly
+    if (!host || host.includes('tauri.localhost') || window.location.protocol === 'file:') {
+      return 'ws://localhost:3001/ws';
+    }
+    // In dev (Vite proxy) — use same host
+    return `ws://${host}/ws`;
+  }
 }
+
+export const API_BASE = (() => {
+  const host = window.location.host;
+  if (!host || host.includes('tauri.localhost') || window.location.protocol === 'file:') {
+    return 'http://localhost:3001';
+  }
+  return '';
+})();
 
 export const wsClient = new WsClient();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE } from './lib/ws-client';
 import { TradingPage } from './pages/TradingPage';
 import { LogsPage } from './pages/LogsPage';
 import { wsClient } from './lib/ws-client';
@@ -20,7 +21,7 @@ export default function App() {
       if (e.ctrlKey && e.shiftKey && e.key === 'K') {
         e.preventDefault();
         if (confirm('EMERGENCY EXIT: Close ALL positions?')) {
-          fetch('/api/hedge/emergency', { method: 'POST' });
+          fetch(`${API_BASE}/api/hedge/emergency`, { method: 'POST' });
         }
       }
       // Ctrl+L: Toggle logs

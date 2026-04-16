@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
+import { API_BASE } from '../lib/ws-client';
 
-const API = '/api';
+const API = `${API_BASE}/api`;
 
 export function TradeFormWidget({ exchange, symbol }: { exchange: string; symbol: string }) {
   const [side, setSide] = useState<'buy' | 'sell'>('buy');

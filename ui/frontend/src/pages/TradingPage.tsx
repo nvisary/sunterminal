@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { API_BASE } from '../lib/ws-client';
 import { OrderBookWidget } from '../widgets/OrderBookWidget';
 import { TradesWidget } from '../widgets/TradesWidget';
 import { TradeFormWidget } from '../widgets/TradeFormWidget';
@@ -39,7 +40,7 @@ function SymbolSearch({
   const doSearch = async (q: string) => {
     if (!q) { setResults([]); return []; }
     try {
-      const res = await fetch(`/api/markets/${exchange}/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`${API_BASE}/api/markets/${exchange}/search?q=${encodeURIComponent(q)}`);
       const data = await res.json() as string[];
       setResults(data);
       setOpen(data.length > 0);
