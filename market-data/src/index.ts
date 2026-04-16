@@ -81,6 +81,11 @@ export class MarketDataService {
         await this.manager.addExchange(exchangeCfg);
         await this.bus.publishStatus(exchangeCfg.id, "connected");
 
+        // Warm up markets cache (needed for UI symbol search)
+        this.marketInfo.getMarkets(exchangeCfg.id).catch((err) =>
+          logger.warn({ exchange: exchangeCfg.id, err }, "Failed to warm markets cache")
+        );
+
         // Subscribe to default symbols
         for (const symbol of exchangeCfg.defaultSymbols) {
           await this.subscribe(exchangeCfg.id, symbol);
@@ -134,6 +139,13 @@ export class MarketDataService {
     }
 
     const ex = this.manager.getExchange(exchange);
+
+    // Validate symbol exists on the exchange
+    if (!ex.markets || !ex.markets[symbol]) {
+      logger.warn({ exchange, symbol }, "Symbol not found on exchange, skipping subscription");
+      return;
+    }
+
     const cfg = this.manager.getConfig(exchange);
 
     // Create AbortControllers for each stream loop

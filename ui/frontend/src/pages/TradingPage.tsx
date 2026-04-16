@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { OrderBookWidget } from '../widgets/OrderBookWidget';
+import { TradesWidget } from '../widgets/TradesWidget';
 import { TradeFormWidget } from '../widgets/TradeFormWidget';
 import { DrawdownWidget } from '../widgets/DrawdownWidget';
 import { ExposureWidget } from '../widgets/ExposureWidget';
@@ -7,78 +8,87 @@ import { AlertsWidget } from '../widgets/AlertsWidget';
 import { HedgeWidget } from '../widgets/HedgeWidget';
 
 const EXCHANGES = ['bybit', 'binance', 'okx'];
-const POPULAR_SYMBOLS = [
-  'BTC/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SOL/USDT:USDT',
-  'XRP/USDT:USDT',
-  'DOGE/USDT:USDT',
-  'WIF/USDT:USDT',
-  'PEPE/USDT:USDT',
-  'SUI/USDT:USDT',
-  'ARB/USDT:USDT',
-  'OP/USDT:USDT',
-  'AVAX/USDT:USDT',
-  'LINK/USDT:USDT',
-  'ADA/USDT:USDT',
-  'TON/USDT:USDT',
-  'TRX/USDT:USDT',
-];
 
 interface PanelConfig {
   exchange: string;
   symbol: string;
 }
 
-function SymbolSelector({
+function SymbolSearch({
   exchange,
-  symbol,
-  onChangeExchange,
-  onChangeSymbol,
-  onCustomSymbol,
+  placeholder,
+  onSelect,
 }: {
   exchange: string;
-  symbol: string;
-  onChangeExchange: (e: string) => void;
-  onChangeSymbol: (s: string) => void;
-  onCustomSymbol: (s: string) => void;
+  placeholder?: string;
+  onSelect: (symbol: string) => void;
 }) {
-  const [custom, setCustom] = useState('');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const doSearch = async (q: string) => {
+    if (!q) { setResults([]); return []; }
+    try {
+      const res = await fetch(`/api/markets/${exchange}/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json() as string[];
+      setResults(data);
+      setOpen(data.length > 0);
+      return data;
+    } catch {
+      setResults([]);
+      return [];
+    }
+  };
 
   return (
-    <div className="flex items-center gap-1 text-xs">
-      <select
-        value={exchange}
-        onChange={(e) => onChangeExchange(e.target.value)}
-        className="bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-0.5 text-gray-300 outline-none"
-      >
-        {EXCHANGES.map((ex) => (
-          <option key={ex} value={ex}>{ex}</option>
-        ))}
-      </select>
-      <select
-        value={symbol}
-        onChange={(e) => onChangeSymbol(e.target.value)}
-        className="bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-0.5 text-gray-300 outline-none"
-      >
-        {POPULAR_SYMBOLS.map((s) => (
-          <option key={s} value={s}>{s.split('/')[0]}</option>
-        ))}
-      </select>
+    <div ref={ref} className="relative">
       <input
         type="text"
-        placeholder="CUSTOM/USDT:USDT"
-        value={custom}
-        onChange={(e) => setCustom(e.target.value.toUpperCase())}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && custom) {
-            const sym = custom.includes('/') ? custom : `${custom}/USDT:USDT`;
-            onCustomSymbol(sym);
-            setCustom('');
+        value={query}
+        onChange={(e) => {
+          const v = e.target.value.toUpperCase();
+          setQuery(v);
+          doSearch(v);
+        }}
+        onFocus={() => { if (results.length > 0) setOpen(true); else if (query) doSearch(query); }}
+        onKeyDown={async (e) => {
+          if (e.key !== 'Enter' || !query) return;
+          e.preventDefault();
+          let r = results;
+          if (r.length === 0) r = await doSearch(query);
+          if (r.length > 0) {
+            onSelect(r[0]!);
+            setQuery('');
+            setOpen(false);
+            setResults([]);
           }
         }}
-        className="w-32 bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-0.5 text-gray-300 placeholder-gray-700 outline-none focus:border-[#4a4a6a]"
+        placeholder={placeholder ?? 'Search symbol...'}
+        className="w-40 bg-[#0a0a14] border border-[#2a2a3a] rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-[#4a4a6a]"
       />
+      {open && results.length > 0 && (
+        <div className="absolute top-full left-0 mt-1 w-64 max-h-60 overflow-y-auto bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50">
+          {results.map((sym) => (
+            <button
+              key={sym}
+              onClick={() => { onSelect(sym); setQuery(''); setOpen(false); setResults([]); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white transition-colors"
+            >
+              {sym}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -95,8 +105,12 @@ export function TradingPage() {
     setPanels((prev) => prev.map((p, i) => (i === idx ? { ...p, ...update } : p)));
   }, []);
 
-  const addPanel = useCallback(() => {
-    setPanels((prev) => [...prev, { exchange: 'bybit', symbol: 'SOL/USDT:USDT' }]);
+  const addPanel = useCallback((symbol: string, exchange: string) => {
+    setPanels((prev) => {
+      const next = [...prev, { exchange, symbol }];
+      setActivePanel(next.length - 1);
+      return next;
+    });
   }, []);
 
   const removePanel = useCallback((idx: number) => {
@@ -140,38 +154,48 @@ export function TradingPage() {
               )}
             </button>
           ))}
-          <button
-            onClick={addPanel}
-            className="px-2 py-0.5 rounded text-xs text-gray-600 hover:text-green-400 border border-dashed border-gray-700 hover:border-green-700 transition-colors"
-          >
-            +
-          </button>
         </div>
+
+        <span className="text-xs text-gray-600 shrink-0">|</span>
+
+        {/* Exchange selector */}
+        <select
+          value={active.exchange}
+          onChange={(e) => updatePanel(activePanel, { exchange: e.target.value })}
+          className="bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-1 text-xs text-gray-300 outline-none"
+        >
+          {EXCHANGES.map((ex) => (
+            <option key={ex} value={ex}>{ex}</option>
+          ))}
+        </select>
+
+        {/* Change active panel symbol */}
+        <SymbolSearch
+          exchange={active.exchange}
+          placeholder="Change symbol..."
+          onSelect={(sym) => updatePanel(activePanel, { symbol: sym })}
+        />
+
+        {/* Add new panel */}
+        <SymbolSearch
+          exchange={active.exchange}
+          placeholder="+ Add orderbook..."
+          onSelect={(sym) => addPanel(sym, active.exchange)}
+        />
 
         <div className="flex-1" />
         <span className="text-xs text-gray-600 shrink-0">Ctrl+Shift+K: emergency</span>
       </div>
 
       {/* Order books */}
-      <div className="col-span-8 row-span-1 overflow-hidden flex flex-col gap-2">
-        {/* Symbol selector for active panel */}
-        <div className="flex items-center gap-2 px-1">
-          <SymbolSelector
-            exchange={active.exchange}
-            symbol={active.symbol}
-            onChangeExchange={(e) => updatePanel(activePanel, { exchange: e })}
-            onChangeSymbol={(s) => updatePanel(activePanel, { symbol: s })}
-            onCustomSymbol={(s) => updatePanel(activePanel, { symbol: s })}
-          />
-        </div>
-
-        <div className="flex-1 grid gap-2 overflow-hidden" style={{
+      <div className="col-span-8 row-span-1 overflow-hidden">
+        <div className="h-full grid gap-2 overflow-hidden" style={{
           gridTemplateColumns: `repeat(${Math.min(panels.length, 4)}, 1fr)`,
         }}>
           {panels.map((p, i) => (
             <div
               key={`${p.exchange}:${p.symbol}:${i}`}
-              className={`overflow-hidden rounded ${
+              className={`overflow-hidden rounded cursor-pointer ${
                 i === activePanel ? 'ring-1 ring-[#3a3a5a]' : ''
               }`}
               onClick={() => setActivePanel(i)}
@@ -184,6 +208,7 @@ export function TradingPage() {
 
       {/* Right sidebar */}
       <div className="col-span-4 row-span-1 space-y-2 overflow-y-auto">
+        <TradesWidget exchange={active.exchange} symbol={active.symbol} />
         <TradeFormWidget exchange={active.exchange} symbol={active.symbol} />
         <DrawdownWidget />
         <ExposureWidget />

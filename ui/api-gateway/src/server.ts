@@ -53,7 +53,7 @@ const server = createServer(async (req, res) => {
   }
 
   // Try trade routes
-  const handled = await tradeRoutes(path, method, body, res);
+  const handled = await tradeRoutes(path, method, body, res, url);
   if (handled) return;
 
   // 404

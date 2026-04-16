@@ -9,7 +9,7 @@ const logger = pino({ name: "trade-routes" });
  * Proxies commands to backend modules via Redis.
  */
 export function createTradeRoutes(redis: Redis) {
-  return async (path: string, method: string, body: Record<string, unknown>, res: ServerResponse): Promise<boolean> => {
+  return async (path: string, method: string, body: Record<string, unknown>, res: ServerResponse, url?: URL): Promise<boolean> => {
     // POST /api/trade/open
     if (path === "/api/trade/open" && method === "POST") {
       await redis.xadd("cmd:trade:open", "MAXLEN", "~", "100", "*", "data", JSON.stringify(body));
@@ -50,6 +50,45 @@ export function createTradeRoutes(redis: Redis) {
     if (path === "/api/hedge/unlock" && method === "POST") {
       await redis.xadd("cmd:hedge:unlock", "MAXLEN", "~", "10", "*", "data", JSON.stringify({}));
       json(res, 200, { ok: true, message: "Unlock command sent" });
+      return true;
+    }
+
+    // GET /api/markets/:exchange — list available swap symbols
+    const marketsMatch = path.match(/^\/api\/markets\/([^/]+)$/);
+    if (marketsMatch && method === "GET") {
+      const exchange = marketsMatch[1]!;
+      const cached = await redis.get(`rest:markets:${exchange}`);
+      if (cached) {
+        const markets = JSON.parse(cached) as Array<{ symbol: string; type: string; active: boolean; quote: string }>;
+        // Filter to active USDT swap markets, return just symbols sorted
+        const symbols = markets
+          .filter((m) => m.active && m.type === "swap" && m.quote === "USDT")
+          .map((m) => m.symbol)
+          .sort();
+        json(res, 200, symbols);
+      } else {
+        json(res, 200, []);
+      }
+      return true;
+    }
+
+    // GET /api/markets/:exchange/search?q=... — search symbols
+    const searchMatch = path.match(/^\/api\/markets\/([^/]+)\/search$/);
+    if (searchMatch && method === "GET") {
+      const exchange = searchMatch[1]!;
+      const q = (url?.searchParams.get("q") ?? "").toUpperCase();
+      const cached = await redis.get(`rest:markets:${exchange}`);
+      if (cached && q) {
+        const markets = JSON.parse(cached) as Array<{ symbol: string; type: string; active: boolean; quote: string; base: string }>;
+        const results = markets
+          .filter((m) => m.active && m.type === "swap" && m.quote === "USDT" && (m.base.includes(q) || m.symbol.includes(q)))
+          .map((m) => m.symbol)
+          .sort()
+          .slice(0, 30);
+        json(res, 200, results);
+      } else {
+        json(res, 200, []);
+      }
       return true;
     }
 

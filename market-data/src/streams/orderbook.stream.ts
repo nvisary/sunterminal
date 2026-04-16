@@ -40,8 +40,13 @@ export async function runOrderBookLoop(
       );
 
       await bus.setSnapshot(snapshotKey, ob);
-    } catch (err) {
+    } catch (err: unknown) {
       if (signal.aborted) break;
+      const name = (err as { name?: string })?.name;
+      if (name === "BadSymbol") {
+        logger.error({ exchangeId, symbol }, "Invalid symbol, stopping orderbook");
+        break;
+      }
       logger.error({ exchangeId, symbol, err }, "Orderbook error, retrying...");
       await sleep(1000);
     }

@@ -55,8 +55,13 @@ export async function runPriceFeedLoop(
           timestamp: lastTrade.timestamp,
         });
       }
-    } catch (err) {
+    } catch (err: unknown) {
       if (signal.aborted) break;
+      const name = (err as { name?: string })?.name;
+      if (name === "BadSymbol") {
+        logger.error({ exchangeId, symbol }, "Invalid symbol, stopping price feed");
+        break;
+      }
       logger.error({ exchangeId, symbol, err }, "Price feed error, retrying...");
       await sleep(1000);
     }
