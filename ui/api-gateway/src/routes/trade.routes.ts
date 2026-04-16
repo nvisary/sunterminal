@@ -80,11 +80,16 @@ export function createTradeRoutes(redis: Redis) {
       const cached = await redis.get(`rest:markets:${exchange}`);
       if (cached && q) {
         const markets = JSON.parse(cached) as Array<{ symbol: string; type: string; active: boolean; quote: string; base: string }>;
-        const results = markets
-          .filter((m) => m.active && m.type === "swap" && m.quote === "USDT" && (m.base.includes(q) || m.symbol.includes(q)))
-          .map((m) => m.symbol)
-          .sort()
-          .slice(0, 30);
+        const filtered = markets
+          .filter((m) => m.active && m.type === "swap" && m.quote === "USDT" && (m.base.includes(q) || m.symbol.includes(q)));
+        // Sort: exact base match first, then startsWith, then rest
+        filtered.sort((a, b) => {
+          const aExact = a.base === q ? 0 : a.base.startsWith(q) ? 1 : 2;
+          const bExact = b.base === q ? 0 : b.base.startsWith(q) ? 1 : 2;
+          if (aExact !== bExact) return aExact - bExact;
+          return a.symbol.localeCompare(b.symbol);
+        });
+        const results = filtered.map((m) => m.symbol).slice(0, 30);
         json(res, 200, results);
       } else {
         json(res, 200, []);
