@@ -93,7 +93,7 @@ function SymbolSearch({
   );
 }
 
-export function TradingPage() {
+export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
   const [panels, setPanels] = useState<PanelConfig[]>([
     { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
     { exchange: 'bybit', symbol: 'ETH/USDT:USDT' },
@@ -184,7 +184,15 @@ export function TradingPage() {
         />
 
         <div className="flex-1" />
-        <span className="text-xs text-gray-600 shrink-0">Ctrl+Shift+K: emergency</span>
+        {onOpenLogs && (
+          <button
+            onClick={onOpenLogs}
+            className="px-2 py-0.5 rounded text-xs text-gray-500 hover:text-gray-200 border border-[#2a2a3a] hover:border-[#4a4a6a] shrink-0"
+          >
+            Logs
+          </button>
+        )}
+        <span className="text-xs text-gray-600 shrink-0">Ctrl+L: logs | Ctrl+Shift+K: emergency</span>
       </div>
 
       {/* Order books */}

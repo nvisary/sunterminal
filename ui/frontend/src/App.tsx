@@ -1,8 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { TradingPage } from './pages/TradingPage';
+import { LogsPage } from './pages/LogsPage';
 import { wsClient } from './lib/ws-client';
 
+type Page = 'trading' | 'logs';
+
 export default function App() {
+  const [page, setPage] = useState<Page>('trading');
+
   useEffect(() => {
     wsClient.connect();
     return () => wsClient.disconnect();
@@ -18,6 +23,11 @@ export default function App() {
           fetch('/api/hedge/emergency', { method: 'POST' });
         }
       }
+      // Ctrl+L: Toggle logs
+      if (e.ctrlKey && e.key === 'l') {
+        e.preventDefault();
+        setPage((p) => p === 'trading' ? 'logs' : 'trading');
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -25,7 +35,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0f]">
-      <TradingPage />
+      {page === 'trading' && <TradingPage onOpenLogs={() => setPage('logs')} />}
+      {page === 'logs' && <LogsPage onBack={() => setPage('trading')} />}
     </div>
   );
 }
