@@ -98,7 +98,7 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Top bar */}
-      <div className="flex items-center gap-1.5 px-2 py-1 bg-[#0d0d14] border-b border-[#1e1e2e] shrink-0 overflow-x-auto">
+      <div className="flex items-center gap-1.5 px-2 py-1 bg-[#0d0d14] border-b border-[#1e1e2e] shrink-0 overflow-visible">
         <span className="text-sm font-bold text-white shrink-0">SunTerminal</span>
         <span className="text-gray-700 shrink-0">|</span>
 
