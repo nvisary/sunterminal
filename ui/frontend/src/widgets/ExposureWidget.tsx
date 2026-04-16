@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { wsClient } from '../lib/ws-client';
+import type { ExposureState } from '../stores/risk.store';
 import { useRiskStore } from '../stores/risk.store';
 
 export function ExposureWidget() {
@@ -7,8 +8,8 @@ export function ExposureWidget() {
   const setExposure = useRiskStore((s) => s.setExposure);
 
   useEffect(() => {
-    return wsClient.subscribe('risk:exposure', (data) => {
-      setExposure(data as any);
+    return wsClient.subscribe<ExposureState>('risk:exposure', (data) => {
+      setExposure(data);
     });
   }, [setExposure]);
 

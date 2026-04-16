@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-interface HedgeState {
+export interface HedgeState {
   mode: string;
   status: string;
   strategies: {

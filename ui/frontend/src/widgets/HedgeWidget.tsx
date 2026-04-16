@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { wsClient } from '../lib/ws-client';
+import type { HedgeState } from '../stores/hedge.store';
 import { useHedgeStore } from '../stores/hedge.store';
 
 export function HedgeWidget() {
@@ -7,8 +8,8 @@ export function HedgeWidget() {
   const setState = useHedgeStore((s) => s.setState);
 
   useEffect(() => {
-    return wsClient.subscribe('hedge:state', (data) => {
-      setState(data as any);
+    return wsClient.subscribe<HedgeState>('hedge:state', (data) => {
+      setState(data);
     });
   }, [setState]);
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-interface DrawdownState {
+export interface DrawdownState {
   equity: number;
   peakEquity: number;
   dailyDrawdownPct: number;
@@ -9,14 +9,14 @@ interface DrawdownState {
   isTradeBlocked: boolean;
 }
 
-interface ExposureState {
+export interface ExposureState {
   netExposure: number;
   grossExposure: number;
   exposureRatio: number;
   equity: number;
 }
 
-interface Alert {
+export interface Alert {
   id: string;
   source: string;
   type: string;

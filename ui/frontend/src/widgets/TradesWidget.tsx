@@ -16,10 +16,9 @@ export function TradesWidget({ exchange, symbol }: { exchange: string; symbol: s
   useEffect(() => {
     setTrades([]);
     const channel = `trades:${exchange}:${symbol}`;
-    const unsub = wsClient.subscribe(channel, (data) => {
-      const t = data as unknown as Trade;
-      if (!t.price) return;
-      setTrades((prev) => [...prev.slice(-(maxTrades - 1)), t]);
+    const unsub = wsClient.subscribe<Trade>(channel, (data) => {
+      if (!data.price) return;
+      setTrades((prev) => [...prev.slice(-(maxTrades - 1)), data]);
     });
     return unsub;
   }, [exchange, symbol]);

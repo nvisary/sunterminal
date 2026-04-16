@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { wsClient, API_BASE } from '../lib/ws-client';
 import { useMarketStore } from '../stores/market.store';
+import type { OrderBook } from '../stores/market.store';
 
 interface OrderBookWidgetProps {
   exchange: string;
@@ -62,8 +63,8 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
 
   useEffect(() => {
     const channel = `orderbook:${exchange}:${symbol}`;
-    const unsub = wsClient.subscribe(channel, (data) => {
-      setOrderbook(key, data as any);
+    const unsub = wsClient.subscribe<OrderBook>(channel, (data) => {
+      setOrderbook(key, data);
     });
     return unsub;
   }, [exchange, symbol, key, setOrderbook]);
@@ -71,12 +72,11 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   useEffect(() => {
     recentTradesRef.current.clear();
     const channel = `trades:${exchange}:${symbol}`;
-    const unsub = wsClient.subscribe(channel, (data) => {
-      const t = data as unknown as RecentTrade;
-      if (!t.price) return;
+    const unsub = wsClient.subscribe<RecentTrade>(channel, (data) => {
+      if (!data.price) return;
       const map = recentTradesRef.current;
-      const rounded = Math.round(t.price * 1e4) / 1e4;
-      map.set(rounded, { ...t, time: Date.now() });
+      const rounded = Math.round(data.price * 1e4) / 1e4;
+      map.set(rounded, { ...data, time: Date.now() });
       const now = Date.now();
       for (const [k, v] of map) {
         if (now - v.time > 3000) map.delete(k);

@@ -1,4 +1,4 @@
-type MessageHandler = (data: Record<string, unknown>) => void;
+type MessageHandler<T = Record<string, unknown>> = (data: T) => void;
 
 class WsClient {
   private ws: WebSocket | null = null;
@@ -50,7 +50,7 @@ class WsClient {
     };
   }
 
-  subscribe(channel: string, handler: MessageHandler): () => void {
+  subscribe<T = Record<string, unknown>>(channel: string, handler: MessageHandler<T>): () => void {
     if (!this.handlers.has(channel)) {
       this.handlers.set(channel, new Set());
       if (this.ws?.readyState === WebSocket.OPEN) {
@@ -59,13 +59,13 @@ class WsClient {
         this.pendingSubscriptions.add(channel);
       }
     }
-    this.handlers.get(channel)!.add(handler);
+    this.handlers.get(channel)!.add(handler as MessageHandler);
 
     // Return unsubscribe function
     return () => {
       const set = this.handlers.get(channel);
       if (set) {
-        set.delete(handler);
+        set.delete(handler as MessageHandler);
         if (set.size === 0) {
           this.handlers.delete(channel);
           if (this.ws?.readyState === WebSocket.OPEN) {

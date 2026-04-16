@@ -14,11 +14,10 @@ export function PriceChartWidget({ exchange, symbol }: { exchange: string; symbo
   useEffect(() => {
     pointsRef.current = [];
     const channel = `trades:${exchange}:${symbol}`;
-    const unsub = wsClient.subscribe(channel, (data) => {
-      const price = data.price as number;
-      if (!price) return;
+    const unsub = wsClient.subscribe<{ price: number }>(channel, (data) => {
+      if (!data.price) return;
       const pts = pointsRef.current;
-      pts.push({ price, time: Date.now() });
+      pts.push({ price: data.price, time: Date.now() });
       if (pts.length > maxPoints) pts.splice(0, pts.length - maxPoints);
     });
     return unsub;

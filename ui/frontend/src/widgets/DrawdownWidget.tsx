@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { wsClient } from '../lib/ws-client';
+import type { DrawdownState } from '../stores/risk.store';
 import { useRiskStore } from '../stores/risk.store';
 
 export function DrawdownWidget() {
@@ -7,8 +8,8 @@ export function DrawdownWidget() {
   const setDrawdown = useRiskStore((s) => s.setDrawdown);
 
   useEffect(() => {
-    return wsClient.subscribe('risk:drawdown', (data) => {
-      setDrawdown(data as any);
+    return wsClient.subscribe<DrawdownState>('risk:drawdown', (data) => {
+      setDrawdown(data);
     });
   }, [setDrawdown]);
 

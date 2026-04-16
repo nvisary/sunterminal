@@ -1,20 +1,13 @@
 import { create } from 'zustand';
+import type { LayoutItem, Layout } from 'react-grid-layout';
+
+export type { LayoutItem, Layout };
 
 export interface WidgetConfig {
   id: string;
   type: string;
   title: string;
   props?: Record<string, unknown>;
-}
-
-export interface LayoutItem {
-  i: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  minW?: number;
-  minH?: number;
 }
 
 export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; defaultH: number; minW?: number; minH?: number }> = {
@@ -54,10 +47,13 @@ const DEFAULT_LAYOUT: LayoutItem[] = [
   { i: 'hedge1', x: 6, y: 11, w: 6, h: 3, minW: 3, minH: 2 },
 ];
 
+// Mutable copy for store (library Layout is readonly)
+type MutableLayout = LayoutItem[];
+
 interface LayoutStore {
   widgets: WidgetConfig[];
-  layout: LayoutItem[];
-  setLayout: (layout: LayoutItem[]) => void;
+  layout: MutableLayout;
+  setLayout: (layout: Layout) => void;
   addWidget: (type: string) => void;
   removeWidget: (id: string) => void;
   resetLayout: () => void;
@@ -68,7 +64,7 @@ let counter = 100;
 export const useLayoutStore = create<LayoutStore>((set) => ({
   widgets: DEFAULT_WIDGETS,
   layout: DEFAULT_LAYOUT,
-  setLayout: (layout) => set({ layout }),
+  setLayout: (layout) => set({ layout: [...layout] }),
   addWidget: (type) => {
     const reg = WIDGET_REGISTRY[type];
     if (!reg) return;
@@ -87,5 +83,5 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
       widgets: s.widgets.filter((w) => w.id !== id),
       layout: s.layout.filter((l) => l.i !== id),
     })),
-  resetLayout: () => set({ widgets: DEFAULT_WIDGETS, layout: DEFAULT_LAYOUT }),
+  resetLayout: () => set({ widgets: DEFAULT_WIDGETS, layout: [...DEFAULT_LAYOUT] }),
 }));

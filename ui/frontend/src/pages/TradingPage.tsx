@@ -11,7 +11,7 @@ import { AlertsWidget } from '../widgets/AlertsWidget';
 import { HedgeWidget } from '../widgets/HedgeWidget';
 import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
-import type { WidgetConfig, LayoutItem } from '../stores/layout.store';
+import type { WidgetConfig, Layout } from '../stores/layout.store';
 
 function WidgetWrapper({ widget, onRemove, children }: {
   widget: WidgetConfig;
@@ -94,7 +94,7 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
     return () => ro.disconnect();
   }, []);
 
-  const onLayoutChange = useCallback((newLayout: LayoutItem[]) => {
+  const onLayoutChange = useCallback((newLayout: Layout) => {
     setLayout(newLayout);
   }, [setLayout]);
 
@@ -175,11 +175,11 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
       {/* DnD Grid */}
       <div ref={containerRef} className="flex-1 overflow-auto">
         <GridLayout
-          layout={layout as any}
+          layout={layout as Layout}
           width={containerWidth}
-          gridConfig={{ cols: 12, rowHeight: 40, margin: [4, 4] as const, containerPadding: [4, 4] as const, maxRows: Infinity }}
+          gridConfig={{ cols: 12, rowHeight: 40, margin: [4, 4], containerPadding: [4, 4], maxRows: Infinity }}
           dragConfig={{ enabled: true, handle: '.drag-handle', bounded: false, threshold: 3 }}
-          onLayoutChange={onLayoutChange as any}
+          onLayoutChange={onLayoutChange}
           compactor={verticalCompactor}
         >
           {widgets.map((widget) => (

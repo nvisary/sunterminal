@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { wsClient } from '../lib/ws-client';
+import type { Alert } from '../stores/risk.store';
 import { useRiskStore } from '../stores/risk.store';
 
 export function AlertsWidget() {
@@ -7,8 +8,8 @@ export function AlertsWidget() {
   const addAlert = useRiskStore((s) => s.addAlert);
 
   useEffect(() => {
-    return wsClient.subscribe('risk:alerts', (data) => {
-      addAlert(data as any);
+    return wsClient.subscribe<Alert>('risk:alerts', (data) => {
+      addAlert(data);
     });
   }, [addAlert]);
 

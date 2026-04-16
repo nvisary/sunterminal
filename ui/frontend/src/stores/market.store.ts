@@ -8,7 +8,7 @@ interface Ticker {
   timestamp: number;
 }
 
-interface OrderBook {
+export interface OrderBook {
   bids: number[][];
   asks: number[][];
   exchange: string;
