@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 export const SYNC_GROUPS = [
   { id: '1', color: '#3b82f6', label: 'Blue' },
@@ -29,31 +30,41 @@ interface SyncStore {
   getWidgetSymbol: (widgetId: string, fallbackExchange: string, fallbackSymbol: string) => SyncGroupState;
 }
 
-export const useSyncStore = create<SyncStore>((set, get) => ({
-  assignments: {},
-  groupState: {
-    '1': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
-    '2': { exchange: 'bybit', symbol: 'ETH/USDT:USDT' },
-    '3': { exchange: 'bybit', symbol: 'SOL/USDT:USDT' },
-    '4': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
-    '5': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
-    '6': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
-  },
+const DEFAULT_GROUP_STATE: Record<string, SyncGroupState> = {
+  '1': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
+  '2': { exchange: 'bybit', symbol: 'ETH/USDT:USDT' },
+  '3': { exchange: 'bybit', symbol: 'SOL/USDT:USDT' },
+  '4': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
+  '5': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
+  '6': { exchange: 'bybit', symbol: 'BTC/USDT:USDT' },
+};
 
-  setWidgetGroup: (widgetId, groupId) =>
-    set((s) => ({ assignments: { ...s.assignments, [widgetId]: groupId } })),
+export const useSyncStore = create<SyncStore>()(
+  persist(
+    (set, get) => ({
+      assignments: {},
+      groupState: DEFAULT_GROUP_STATE,
 
-  setGroupSymbol: (groupId, exchange, symbol) =>
-    set((s) => ({
-      groupState: { ...s.groupState, [groupId]: { exchange, symbol } },
-    })),
+      setWidgetGroup: (widgetId, groupId) =>
+        set((s) => ({ assignments: { ...s.assignments, [widgetId]: groupId } })),
 
-  getWidgetSymbol: (widgetId, fallbackExchange, fallbackSymbol) => {
-    const s = get();
-    const groupId = s.assignments[widgetId];
-    if (groupId && s.groupState[groupId]) {
-      return s.groupState[groupId];
-    }
-    return { exchange: fallbackExchange, symbol: fallbackSymbol };
-  },
-}));
+      setGroupSymbol: (groupId, exchange, symbol) =>
+        set((s) => ({
+          groupState: { ...s.groupState, [groupId]: { exchange, symbol } },
+        })),
+
+      getWidgetSymbol: (widgetId, fallbackExchange, fallbackSymbol) => {
+        const s = get();
+        const groupId = s.assignments[widgetId];
+        if (groupId && s.groupState[groupId]) {
+          return s.groupState[groupId];
+        }
+        return { exchange: fallbackExchange, symbol: fallbackSymbol };
+      },
+    }),
+    {
+      name: 'sun-sync',
+      partialize: (s) => ({ assignments: s.assignments, groupState: s.groupState }),
+    },
+  ),
+);

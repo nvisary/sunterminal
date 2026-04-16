@@ -142,6 +142,7 @@ risk-engine, hedge-engine, trade-exec, ui-gateway, python-ml, journal
 
 ## Conventions
 
+- **Git commits**: НЕ добавлять `Co-Authored-By` в коммиты
 - Each module: standalone npm package, own package.json, own .env
 - Entry point: `index.ts` with `import "dotenv/config"`
 - Facade pattern: one main class (MarketDataService, RiskEngine, HedgeEngine, TradeExecutionService)

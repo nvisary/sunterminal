@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { LayoutItem, Layout } from 'react-grid-layout';
 
 export type { LayoutItem, Layout };
@@ -95,83 +96,91 @@ interface LayoutStore {
   activePane: () => Pane;
 }
 
-let counter = 100;
+let counter = Date.now();
 
-export const useLayoutStore = create<LayoutStore>((set, get) => ({
-  panes: DEFAULT_PANES,
-  activePaneId: DEFAULT_PANES[0]!.id,
+export const useLayoutStore = create<LayoutStore>()(
+  persist(
+    (set, get) => ({
+      panes: DEFAULT_PANES,
+      activePaneId: DEFAULT_PANES[0]!.id,
 
-  setActivePane: (id) => set({ activePaneId: id }),
+      setActivePane: (id) => set({ activePaneId: id }),
 
-  setLayout: (layout) =>
-    set((s) => ({
-      panes: s.panes.map((p) =>
-        p.id === s.activePaneId ? { ...p, layout: [...layout] } : p
-      ),
-    })),
+      setLayout: (layout) =>
+        set((s) => ({
+          panes: s.panes.map((p) =>
+            p.id === s.activePaneId ? { ...p, layout: [...layout] } : p
+          ),
+        })),
 
-  addWidget: (type) => {
-    const reg = WIDGET_REGISTRY[type];
-    if (!reg) return;
-    const id = `${type}_${++counter}`;
-    set((s) => ({
-      panes: s.panes.map((p) =>
-        p.id === s.activePaneId
-          ? {
-              ...p,
-              widgets: [...p.widgets, { id, type, title: reg.title }],
-              layout: [...p.layout, {
-                i: id, x: 0, y: 999,
-                w: reg.defaultW, h: reg.defaultH,
-                minW: reg.minW, minH: reg.minH,
-              }],
-            }
-          : p
-      ),
-    }));
-  },
+      addWidget: (type) => {
+        const reg = WIDGET_REGISTRY[type];
+        if (!reg) return;
+        const id = `${type}_${++counter}`;
+        set((s) => ({
+          panes: s.panes.map((p) =>
+            p.id === s.activePaneId
+              ? {
+                  ...p,
+                  widgets: [...p.widgets, { id, type, title: reg.title }],
+                  layout: [...p.layout, {
+                    i: id, x: 0, y: 999,
+                    w: reg.defaultW, h: reg.defaultH,
+                    minW: reg.minW, minH: reg.minH,
+                  }],
+                }
+              : p
+          ),
+        }));
+      },
 
-  removeWidget: (id) =>
-    set((s) => ({
-      panes: s.panes.map((p) =>
-        p.id === s.activePaneId
-          ? {
-              ...p,
-              widgets: p.widgets.filter((w) => w.id !== id),
-              layout: p.layout.filter((l) => l.i !== id),
-            }
-          : p
-      ),
-    })),
+      removeWidget: (id) =>
+        set((s) => ({
+          panes: s.panes.map((p) =>
+            p.id === s.activePaneId
+              ? {
+                  ...p,
+                  widgets: p.widgets.filter((w) => w.id !== id),
+                  layout: p.layout.filter((l) => l.i !== id),
+                }
+              : p
+          ),
+        })),
 
-  addPane: (name) => {
-    const id = `pane_${++counter}`;
-    const pane = makeDefaultPane(id, name);
-    set((s) => ({
-      panes: [...s.panes, pane],
-      activePaneId: id,
-    }));
-  },
+      addPane: (name) => {
+        const id = `pane_${++counter}`;
+        const pane = makeDefaultPane(id, name);
+        set((s) => ({
+          panes: [...s.panes, pane],
+          activePaneId: id,
+        }));
+      },
 
-  removePane: (id) =>
-    set((s) => {
-      if (s.panes.length <= 1) return s;
-      const panes = s.panes.filter((p) => p.id !== id);
-      return {
-        panes,
-        activePaneId: s.activePaneId === id ? panes[0]!.id : s.activePaneId,
-      };
+      removePane: (id) =>
+        set((s) => {
+          if (s.panes.length <= 1) return s;
+          const panes = s.panes.filter((p) => p.id !== id);
+          return {
+            panes,
+            activePaneId: s.activePaneId === id ? panes[0]!.id : s.activePaneId,
+          };
+        }),
+
+      renamePane: (id, name) =>
+        set((s) => ({
+          panes: s.panes.map((p) => (p.id === id ? { ...p, name } : p)),
+        })),
+
+      resetLayout: () => set({ panes: DEFAULT_PANES.map((p) => ({ ...p, layout: [...p.layout], widgets: [...p.widgets] })), activePaneId: DEFAULT_PANES[0]!.id }),
+
+      activePane: () => {
+        const s = get();
+        return s.panes.find((p) => p.id === s.activePaneId) ?? s.panes[0]!;
+      },
     }),
-
-  renamePane: (id, name) =>
-    set((s) => ({
-      panes: s.panes.map((p) => (p.id === id ? { ...p, name } : p)),
-    })),
-
-  resetLayout: () => set({ panes: DEFAULT_PANES.map((p) => ({ ...p, layout: [...p.layout], widgets: [...p.widgets] })), activePaneId: DEFAULT_PANES[0]!.id }),
-
-  activePane: () => {
-    const s = get();
-    return s.panes.find((p) => p.id === s.activePaneId) ?? s.panes[0]!;
-  },
-}));
+    {
+      name: 'sun-layout',
+      partialize: (s) => ({ panes: s.panes, activePaneId: s.activePaneId }),
+    },
+  ),
+);

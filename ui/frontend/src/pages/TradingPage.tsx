@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { GridLayout, verticalCompactor } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { OrderBookWidget } from '../widgets/OrderBookWidget';
@@ -18,26 +19,43 @@ import type { WidgetConfig, Layout } from '../stores/layout.store';
 function SyncDot({ widgetId }: { widgetId: string }) {
   const groupId = useSyncStore((s) => s.assignments[widgetId] ?? null);
   const setGroup = useSyncStore((s) => s.setWidgetGroup);
-  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   const currentGroup = SYNC_GROUPS.find((g) => g.id === groupId);
   const dotColor = currentGroup?.color ?? '#333';
 
+  const handleOpen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (pos) { setPos(null); return; }
+    const btn = btnRef.current?.getBoundingClientRect();
+    if (!btn) return;
+    const menuW = 80, menuH = 200;
+    let top = btn.bottom + 4;
+    let left = btn.left;
+    if (left + menuW > window.innerWidth) left = window.innerWidth - menuW - 4;
+    if (left < 4) left = 4;
+    if (top + menuH > window.innerHeight) top = btn.top - menuH - 4;
+    setPos({ top, left });
+  };
+
   return (
     <div className="relative">
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        ref={btnRef}
+        onClick={handleOpen}
         className="w-3 h-3 rounded-full border border-gray-700 hover:border-gray-500 shrink-0"
         style={{ backgroundColor: dotColor }}
         title={currentGroup ? `Group: ${currentGroup.label}` : 'No sync group (click to assign)'}
       />
-      {open && (
+      {pos && createPortal(
         <div
-          className="absolute top-full right-0 mt-1 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50 p-1.5 flex flex-col gap-1"
-          onMouseLeave={() => setOpen(false)}
+          className="fixed bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg p-1.5 flex flex-col gap-1"
+          style={{ top: pos.top, left: pos.left, zIndex: 9999 }}
+          onMouseLeave={() => setPos(null)}
         >
           <button
-            onClick={() => { setGroup(widgetId, null); setOpen(false); }}
+            onClick={() => { setGroup(widgetId, null); setPos(null); }}
             className="flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white rounded hover:bg-[#1e1e2e]"
           >
             <span className="w-2.5 h-2.5 rounded-full bg-gray-700 border border-gray-600" />
@@ -46,7 +64,7 @@ function SyncDot({ widgetId }: { widgetId: string }) {
           {SYNC_GROUPS.map((g) => (
             <button
               key={g.id}
-              onClick={() => { setGroup(widgetId, g.id); setOpen(false); }}
+              onClick={() => { setGroup(widgetId, g.id); setPos(null); }}
               className={`flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] rounded hover:bg-[#1e1e2e] ${
                 groupId === g.id ? 'text-white' : 'text-gray-400 hover:text-white'
               }`}
@@ -55,7 +73,8 @@ function SyncDot({ widgetId }: { widgetId: string }) {
               {g.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
