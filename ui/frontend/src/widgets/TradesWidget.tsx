@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { wsClient } from '../lib/ws-client';
 
 interface Trade {
@@ -9,66 +9,101 @@ interface Trade {
   timestamp: number;
 }
 
+const MAX_TRADES = 80;
+
+function formatPrice(p: number): string {
+  if (p > 1000) return p.toFixed(1);
+  if (p > 1) return p.toFixed(2);
+  return p.toFixed(5);
+}
+
+function formatAmount(a: number): string {
+  if (a >= 1000) return (a / 1000).toFixed(2) + 'k';
+  if (a >= 10) return a.toFixed(2);
+  if (a >= 1) return a.toFixed(3);
+  return a.toFixed(4);
+}
+
 export function TradesWidget({ exchange, symbol }: { exchange: string; symbol: string }) {
   const [trades, setTrades] = useState<Trade[]>([]);
-  const maxTrades = 50;
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setTrades([]);
     const channel = `trades:${exchange}:${symbol}`;
     const unsub = wsClient.subscribe<Trade>(channel, (data) => {
       if (!data.price) return;
-      setTrades((prev) => [...prev.slice(-(maxTrades - 1)), data]);
+      setTrades((prev) => {
+        const next = prev.length >= MAX_TRADES ? prev.slice(prev.length - MAX_TRADES + 1) : prev.slice();
+        next.push(data);
+        return next;
+      });
     });
     return unsub;
   }, [exchange, symbol]);
 
-  // Calculate max amount for bubble sizing
-  const maxAmount = Math.max(...trades.map((t) => t.amount || 0), 0.001);
+  // Auto-scroll to rightmost (newest) on update
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = el.scrollWidth;
+  }, [trades]);
 
   const baseName = symbol.split('/')[0] ?? symbol;
 
+  const maxAmount = trades.reduce((m, t) => (t.amount > m ? t.amount : m), 0.001);
+  const lastTrade = trades[trades.length - 1];
+
   return (
-    <div className="bg-[#0c0c14] rounded border border-[#1a1a2a] p-2 h-full overflow-hidden flex flex-col">
-      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5 px-1 shrink-0">
-        Trades — {baseName}
+    <div className="bg-[#0c0c14] rounded border border-[#1a1a2a] h-full overflow-hidden flex flex-col">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-2 py-1 border-b border-[#1a1a2a] shrink-0 text-[10px]">
+        <span className="text-gray-400 uppercase tracking-wider">Tape — {baseName}</span>
+        <span className="text-gray-600">{trades.length} prints</span>
+        {lastTrade && (
+          <span className={`ml-auto font-mono text-[11px] ${lastTrade.side === 'buy' ? 'text-green-400' : 'text-red-400'}`}>
+            {formatPrice(lastTrade.price)}
+          </span>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-px">
-        {trades.length === 0 && (
-          <div className="text-gray-600 text-center py-6 text-xs">Waiting...</div>
-        )}
-        {[...trades].reverse().map((t, i) => {
-          const isBuy = t.side === 'buy';
-          // Bubble size: min 6px, max 28px based on relative amount
-          const relSize = Math.sqrt(t.amount / maxAmount);
-          const bubbleSize = Math.max(6, Math.min(28, relSize * 28));
-          const time = new Date(t.timestamp).toLocaleTimeString('en-GB', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit',
-          });
-
-          return (
-            <div key={i} className="flex items-center gap-1.5 px-1 h-5">
-              {/* Bubble */}
-              <div className="w-8 flex justify-center shrink-0">
+      {/* Horizontal bubble tape */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+        {trades.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-gray-600 text-xs">Waiting for trades...</div>
+        ) : (
+          <div className="h-full flex items-center gap-1 px-2 py-1" style={{ minWidth: '100%' }}>
+            {trades.map((t, i) => {
+              const isBuy = t.side === 'buy';
+              const rel = Math.sqrt(t.amount / maxAmount);
+              // Bubble area grows with √volume; container controls visual max via CSS
+              const size = Math.max(8, Math.min(56, rel * 56));
+              const time = new Date(t.timestamp).toLocaleTimeString('en-GB', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+              });
+              return (
                 <div
-                  className={`rounded-full ${isBuy ? 'bg-green-500/70' : 'bg-red-500/70'}`}
-                  style={{ width: bubbleSize, height: bubbleSize }}
-                />
-              </div>
-              {/* Price */}
-              <span className={`text-[11px] font-mono w-20 ${isBuy ? 'text-green-400' : 'text-red-400'}`}>
-                {t.price.toFixed(t.price > 1000 ? 1 : t.price > 1 ? 2 : 4)}
-              </span>
-              {/* Amount */}
-              <span className="text-[10px] font-mono text-gray-500 w-16 text-right">
-                {t.amount.toFixed(4)}
-              </span>
-              {/* Time */}
-              <span className="text-[10px] text-gray-600 ml-auto">{time}</span>
-            </div>
-          );
-        })}
+                  key={i}
+                  className="flex flex-col items-center justify-center shrink-0 group"
+                  style={{ width: Math.max(28, size + 6) }}
+                  title={`${time}\n${isBuy ? 'BUY' : 'SELL'}  ${formatAmount(t.amount)} @ ${formatPrice(t.price)}`}
+                >
+                  <div
+                    className={`rounded-full ${isBuy ? 'bg-green-500/70 group-hover:bg-green-400' : 'bg-red-500/70 group-hover:bg-red-400'}`}
+                    style={{
+                      width: size,
+                      height: size,
+                      boxShadow: size > 28 ? `0 0 ${Math.round(size / 3)}px ${isBuy ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}` : undefined,
+                    }}
+                  />
+                  <span className={`text-[9px] font-mono mt-0.5 ${isBuy ? 'text-green-400' : 'text-red-400'}`}>
+                    {formatPrice(t.price)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -5,6 +5,10 @@ import 'react-grid-layout/css/styles.css';
 import { OrderBookWidget } from '../widgets/OrderBookWidget';
 import { PriceChartWidget } from '../widgets/PriceChartWidget';
 import { TradesWidget } from '../widgets/TradesWidget';
+import { VolumeProfileWidget } from '../widgets/VolumeProfileWidget';
+import { FundingWidget } from '../widgets/FundingWidget';
+import { VolatilityWidget } from '../widgets/VolatilityWidget';
+import { LevelsWidget } from '../widgets/LevelsWidget';
 import { TradeFormWidget } from '../widgets/TradeFormWidget';
 import { DrawdownWidget } from '../widgets/DrawdownWidget';
 import { ExposureWidget } from '../widgets/ExposureWidget';
@@ -156,6 +160,14 @@ function WidgetContent({ widget }: { widget: WidgetConfig }) {
       return <CandleChartWidget defaultExchange={resolved.exchange} defaultSymbol={resolved.symbol} />;
     case 'trades':
       return <TradesWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+    case 'volumeProfile':
+      return <VolumeProfileWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+    case 'funding':
+      return <FundingWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+    case 'volatility':
+      return <VolatilityWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+    case 'levels':
+      return <LevelsWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'tradeForm':
       return <TradeFormWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'drawdown':

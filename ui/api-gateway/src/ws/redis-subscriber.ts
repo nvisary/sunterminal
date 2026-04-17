@@ -169,6 +169,10 @@ export class RedisSubscriber {
     if (channel.startsWith("orderbook:")) return `md:${channel}`;
     if (channel.startsWith("trades:")) return `md:${channel}`;
     if (channel.startsWith("ticker:")) return `md:${channel}`;
+    if (channel.startsWith("funding:")) return `md:${channel}`;
+    // Per-symbol risk snapshots (polled by subscriber every 1s)
+    if (channel.startsWith("volatility:")) return `risk:snapshot:${channel}`;
+    if (channel.startsWith("levels:")) return `risk:snapshot:${channel}`;
 
     logger.warn({ channel }, "Unknown channel mapping");
     return null;

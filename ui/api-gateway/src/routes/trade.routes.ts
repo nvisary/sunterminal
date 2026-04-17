@@ -155,6 +155,25 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // GET /api/snapshot/{funding|volatility|levels}/:exchange/:symbol
+    const snapMatch = path.match(/^\/api\/snapshot\/(funding|volatility|levels)\/([^/]+)\/(.+)$/);
+    if (snapMatch && method === "GET") {
+      const kind = snapMatch[1]!;
+      const exchange = snapMatch[2]!;
+      const symbol = decodeURIComponent(snapMatch[3]!);
+      const redisKey =
+        kind === "funding"
+          ? `snapshot:funding:${exchange}:${symbol}`
+          : `risk:snapshot:${kind}:${exchange}:${symbol}`;
+      try {
+        const raw = await redis.get(redisKey);
+        json(res, 200, raw ? JSON.parse(raw) : null);
+      } catch {
+        json(res, 200, null);
+      }
+      return true;
+    }
+
     // POST /api/subscribe
     if (path === "/api/subscribe" && method === "POST") {
       const { exchange, symbol } = body as { exchange: string; symbol: string };

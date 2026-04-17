@@ -20,7 +20,11 @@ export interface Pane {
 
 export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; defaultH: number; minW?: number; minH?: number }> = {
   orderbook: { title: 'Order Book', defaultW: 4, defaultH: 8, minW: 3, minH: 4 },
-  trades: { title: 'Trades', defaultW: 3, defaultH: 6, minW: 2, minH: 3 },
+  trades: { title: 'Tape', defaultW: 8, defaultH: 3, minW: 3, minH: 2 },
+  volumeProfile: { title: 'Volume Profile', defaultW: 3, defaultH: 8, minW: 2, minH: 4 },
+  funding: { title: 'Funding', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  volatility: { title: 'Volatility / ATR', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  levels: { title: 'Key Levels', defaultW: 3, defaultH: 6, minW: 2, minH: 4 },
   chart: { title: 'Sparkline', defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
   candleChart: { title: 'Candle Chart', defaultW: 6, defaultH: 7, minW: 4, minH: 5 },
   tradeForm: { title: 'Trade Form', defaultW: 3, defaultH: 5, minW: 2, minH: 3 },
@@ -50,7 +54,7 @@ function makeDefaultPane(id: string, name: string): Pane {
       { i: `${id}_ob2`, x: 4, y: 0, w: 4, h: 8, minW: 3, minH: 4 },
       { i: `${id}_chart1`, x: 0, y: 8, w: 4, h: 3, minW: 3, minH: 2 },
       { i: `${id}_chart2`, x: 4, y: 8, w: 4, h: 3, minW: 3, minH: 2 },
-      { i: `${id}_trades`, x: 8, y: 0, w: 4, h: 5, minW: 2, minH: 3 },
+      { i: `${id}_trades`, x: 0, y: 14, w: 8, h: 4, minW: 4, minH: 3 },
       { i: `${id}_form`, x: 8, y: 5, w: 4, h: 3, minW: 2, minH: 3 },
       { i: `${id}_dd`, x: 8, y: 8, w: 2, h: 3, minW: 2, minH: 3 },
       { i: `${id}_exp`, x: 10, y: 8, w: 2, h: 3, minW: 2, minH: 3 },
@@ -70,7 +74,7 @@ function makeChartPane(id: string, name: string): Pane {
     ],
     layout: [
       { i: `${id}_candle`, x: 0, y: 0, w: 8, h: 10, minW: 4, minH: 5 },
-      { i: `${id}_trades`, x: 8, y: 0, w: 4, h: 6, minW: 2, minH: 3 },
+      { i: `${id}_trades`, x: 0, y: 10, w: 8, h: 4, minW: 4, minH: 3 },
       { i: `${id}_alerts`, x: 8, y: 6, w: 4, h: 4, minW: 3, minH: 2 },
     ],
   };
