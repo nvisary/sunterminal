@@ -11,11 +11,14 @@ type MessageHandler = (channel: string, data: Record<string, unknown>) => void;
  * Manages WebSocket connections and proxies Redis data to clients.
  * Automatically tells market-data to subscribe to new symbols.
  */
+const MAX_MD_SUBSCRIPTIONS = 20;
+
 export class WsProxy {
   private subscriber: RedisSubscriber;
   private redis: Redis;
   private clientHandlers = new Map<WebSocket, Map<string, MessageHandler>>();
-  private mdSubscribed = new Set<string>(); // "exchange:symbol" already requested
+  private mdSubscribed = new Set<string>(); // "exchange:symbol" currently active
+  private mdSubscribedOrder: string[] = []; // LRU order for eviction
 
   constructor(subscriber: RedisSubscriber, redis: Redis) {
     this.subscriber = subscriber;
@@ -76,6 +79,7 @@ export class WsProxy {
     if (handler) {
       this.subscriber.unsubscribe(channel, handler);
       handlers.delete(channel);
+      this.checkMdUnsubscription(channel);
     }
   }
 
@@ -84,39 +88,92 @@ export class WsProxy {
     if (handlers) {
       for (const [channel, handler] of handlers) {
         this.subscriber.unsubscribe(channel, handler);
+        this.checkMdUnsubscription(channel);
       }
     }
     this.clientHandlers.delete(ws);
     logger.debug("WebSocket client disconnected");
   }
 
+  private static parseSymbolChannel(channel: string): { exchange: string; symbol: string } | null {
+    const match = channel.match(/^(?:orderbook|trades|ticker):([^:]+):(.+)$/);
+    if (!match) return null;
+    return { exchange: match[1]!, symbol: match[2]! };
+  }
+
   /**
    * When a client subscribes to orderbook/trades/ticker for a symbol,
    * tell market-data to subscribe if not already done.
+   * Evicts oldest subscriptions when over the limit.
    */
   private async ensureMdSubscription(channel: string): Promise<void> {
-    // Parse channel: "orderbook:bybit:BTC/USDT:USDT" or "trades:bybit:ETH/USDT:USDT"
-    const match = channel.match(/^(?:orderbook|trades|ticker):([^:]+):(.+)$/);
-    if (!match) return;
+    const parsed = WsProxy.parseSymbolChannel(channel);
+    if (!parsed) return;
 
-    const exchange = match[1]!;
-    const symbol = match[2]!;
+    const { exchange, symbol } = parsed;
     const key = `${exchange}:${symbol}`;
 
-    if (this.mdSubscribed.has(key)) return;
-    this.mdSubscribed.add(key);
+    if (this.mdSubscribed.has(key)) {
+      // Move to end of LRU
+      this.mdSubscribedOrder = this.mdSubscribedOrder.filter((k) => k !== key);
+      this.mdSubscribedOrder.push(key);
+      return;
+    }
 
+    // Evict oldest if over limit
+    while (this.mdSubscribed.size >= MAX_MD_SUBSCRIPTIONS && this.mdSubscribedOrder.length > 0) {
+      const oldest = this.mdSubscribedOrder.shift()!;
+      await this.sendMdCommand("unsubscribe", oldest);
+      this.mdSubscribed.delete(oldest);
+    }
+
+    this.mdSubscribed.add(key);
+    this.mdSubscribedOrder.push(key);
+    await this.sendMdCommand("subscribe", key);
+  }
+
+  /**
+   * When no clients are listening to any channel for a symbol,
+   * tell market-data to unsubscribe.
+   */
+  private checkMdUnsubscription(channel: string): void {
+    const parsed = WsProxy.parseSymbolChannel(channel);
+    if (!parsed) return;
+
+    const { exchange, symbol } = parsed;
+    const key = `${exchange}:${symbol}`;
+
+    if (!this.mdSubscribed.has(key)) return;
+
+    // Check if any client still listens to any stream for this symbol
+    const prefixes = [`orderbook:${exchange}:${symbol}`, `trades:${exchange}:${symbol}`, `ticker:${exchange}:${symbol}`];
+    for (const prefix of prefixes) {
+      if (this.subscriber.getSubscriberCount(prefix) > 0) return;
+    }
+
+    // No listeners left — unsubscribe from market-data
+    this.mdSubscribed.delete(key);
+    this.mdSubscribedOrder = this.mdSubscribedOrder.filter((k) => k !== key);
+    this.sendMdCommand("unsubscribe", key);
+  }
+
+  private async sendMdCommand(method: "subscribe" | "unsubscribe", key: string): Promise<void> {
+    const [exchange, ...rest] = key.split(":");
+    const symbol = rest.join(":");
     try {
       await this.redis.xadd(
         "cmd:rest-request",
         "MAXLEN", "~", "1000",
         "*",
-        "data", JSON.stringify({ method: "subscribe", exchange, args: [symbol], replyTo: "" })
+        "data", JSON.stringify({ method, exchange, args: [symbol], replyTo: "" })
       );
-      logger.info({ exchange, symbol }, "Requested market-data subscription");
+      logger.info({ exchange, symbol }, `Requested market-data ${method}`);
     } catch (err) {
-      logger.error({ exchange, symbol, err }, "Failed to request md subscription");
-      this.mdSubscribed.delete(key);
+      logger.error({ exchange, symbol, err }, `Failed to request md ${method}`);
+      if (method === "subscribe") {
+        this.mdSubscribed.delete(key);
+        this.mdSubscribedOrder = this.mdSubscribedOrder.filter((k) => k !== key);
+      }
     }
   }
 
