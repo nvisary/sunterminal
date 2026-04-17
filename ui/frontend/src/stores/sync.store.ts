@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export const EXCHANGES = ['bybit', 'binance', 'okx'] as const;
+
 export const SYNC_GROUPS = [
   { id: '1', color: '#3b82f6', label: 'Blue' },
   { id: '2', color: '#ef4444', label: 'Red' },

@@ -84,6 +84,7 @@ const DEFAULT_PANES: Pane[] = [
 interface LayoutStore {
   panes: Pane[];
   activePaneId: string;
+  sidebarOpen: boolean;
   setActivePane: (id: string) => void;
   setLayout: (layout: Layout) => void;
   addWidget: (type: string) => void;
@@ -91,7 +92,9 @@ interface LayoutStore {
   addPane: (name: string) => void;
   removePane: (id: string) => void;
   renamePane: (id: string, name: string) => void;
+  renameWidget: (id: string, title: string) => void;
   resetLayout: () => void;
+  toggleSidebar: () => void;
   // Derived getters
   activePane: () => Pane;
 }
@@ -103,8 +106,10 @@ export const useLayoutStore = create<LayoutStore>()(
     (set, get) => ({
       panes: DEFAULT_PANES,
       activePaneId: DEFAULT_PANES[0]!.id,
+      sidebarOpen: false,
 
       setActivePane: (id) => set({ activePaneId: id }),
+      toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 
       setLayout: (layout) =>
         set((s) => ({
@@ -170,6 +175,15 @@ export const useLayoutStore = create<LayoutStore>()(
           panes: s.panes.map((p) => (p.id === id ? { ...p, name } : p)),
         })),
 
+      renameWidget: (id, title) =>
+        set((s) => ({
+          panes: s.panes.map((p) =>
+            p.id === s.activePaneId
+              ? { ...p, widgets: p.widgets.map((w) => w.id === id ? { ...w, title } : w) }
+              : p
+          ),
+        })),
+
       resetLayout: () => set({ panes: DEFAULT_PANES.map((p) => ({ ...p, layout: [...p.layout], widgets: [...p.widgets] })), activePaneId: DEFAULT_PANES[0]!.id }),
 
       activePane: () => {
@@ -179,7 +193,7 @@ export const useLayoutStore = create<LayoutStore>()(
     }),
     {
       name: 'sun-layout',
-      partialize: (s) => ({ panes: s.panes, activePaneId: s.activePaneId }),
+      partialize: (s) => ({ panes: s.panes, activePaneId: s.activePaneId, sidebarOpen: s.sidebarOpen }),
     },
   ),
 );

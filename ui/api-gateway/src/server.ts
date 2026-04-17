@@ -53,8 +53,17 @@ const server = createServer(async (req, res) => {
   }
 
   // Try trade routes
-  const handled = await tradeRoutes(path, method, body, res, url);
-  if (handled) return;
+  try {
+    const handled = await tradeRoutes(path, method, body, res, url);
+    if (handled) return;
+  } catch (err) {
+    logger.error({ err, path }, "Route handler error");
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify({ error: "Internal server error" }));
+    }
+    return;
+  }
 
   // 404
   res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });

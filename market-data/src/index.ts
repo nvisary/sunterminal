@@ -142,9 +142,11 @@ export class MarketDataService {
 
     // Validate symbol exists on the exchange
     if (!ex.markets || !ex.markets[symbol]) {
-      logger.warn({ exchange, symbol }, "Symbol not found on exchange, skipping subscription");
+      logger.warn({ exchange, symbol, hasMarkets: !!ex.markets, marketCount: ex.markets ? Object.keys(ex.markets).length : 0 }, "Symbol not found on exchange, skipping subscription");
       return;
     }
+
+    logger.info({ exchange, symbol }, "Starting streams for symbol");
 
     const cfg = this.manager.getConfig(exchange);
 

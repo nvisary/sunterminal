@@ -12,23 +12,24 @@ class WsClient {
   }
 
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
 
-    this.ws = new WebSocket(this.url);
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (this.ws !== ws) { ws.close(); return; }
       console.log("[WS] Connected");
-      // Re-subscribe all channels
       for (const channel of this.handlers.keys()) {
         this.send({ action: "subscribe", channel });
       }
       for (const channel of this.pendingSubscriptions) {
         this.send({ action: "subscribe", channel });
-        this.pendingSubscriptions.delete(channel);
       }
+      this.pendingSubscriptions.clear();
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as { channel: string; data: Record<string, unknown> };
         const handlers = this.handlers.get(msg.channel);
@@ -40,13 +41,15 @@ class WsClient {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return; // stale connection, ignore
       console.log("[WS] Disconnected, reconnecting in 2s...");
+      this.ws = null;
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
-      this.ws?.close();
+    ws.onerror = () => {
+      ws.close();
     };
   }
 

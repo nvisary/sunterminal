@@ -141,6 +141,20 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // GET /api/snapshot/ob/:exchange/:symbol — get latest orderbook snapshot
+    const obSnapMatch = path.match(/^\/api\/snapshot\/ob\/([^/]+)\/(.+)$/);
+    if (obSnapMatch && method === "GET") {
+      const exchange = obSnapMatch[1]!;
+      const symbol = decodeURIComponent(obSnapMatch[2]!);
+      try {
+        const raw = await redis.get(`snapshot:ob:${exchange}:${symbol}`);
+        json(res, 200, raw ? JSON.parse(raw) : null);
+      } catch {
+        json(res, 200, null);
+      }
+      return true;
+    }
+
     // POST /api/subscribe
     if (path === "/api/subscribe" && method === "POST") {
       const { exchange, symbol } = body as { exchange: string; symbol: string };

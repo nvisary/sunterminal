@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { wsClient, API_BASE } from '../lib/ws-client';
 import { useMarketStore } from '../stores/market.store';
+import { EXCHANGES } from '../stores/sync.store';
 import type { OrderBook } from '../stores/market.store';
 
 interface OrderBookWidgetProps {
@@ -10,8 +11,6 @@ interface OrderBookWidgetProps {
   onChangeSymbol?: (symbol: string) => void;
   onChangeExchange?: (exchange: string) => void;
 }
-
-const EXCHANGES = ['bybit', 'binance', 'okx'];
 
 function getTickSteps(price: number): number[] {
   if (price > 10000) return [0.1, 0.5, 1, 5, 10, 50, 100];
@@ -62,6 +61,11 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const recentTradesRef = useRef<Map<number, RecentTrade>>(new Map());
 
   useEffect(() => {
+    // Fetch snapshot immediately for instant render
+    fetch(`${API_BASE}/api/snapshot/ob/${exchange}/${encodeURIComponent(symbol)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.bids) setOrderbook(key, data as OrderBook); })
+      .catch(() => {});
     const channel = `orderbook:${exchange}:${symbol}`;
     const unsub = wsClient.subscribe<OrderBook>(channel, (data) => {
       setOrderbook(key, data);
@@ -284,7 +288,9 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
 
       {/* DOM Ladder */}
       <div ref={ladderRef} className="flex-1 overflow-hidden flex flex-col font-mono text-[11px] leading-none select-none">
-        {rows.map((row, i) => {
+        {!orderbook || (bids.length === 0 && asks.length === 0) ? (
+          <div className="flex-1 flex items-center justify-center text-gray-600 text-xs">Waiting for data...</div>
+        ) : rows.map((row, i) => {
           if (row.side === 'spread') {
             return (
               <div key="spread" className="flex items-center justify-center border-y border-[#1e1e2e] bg-[#08080e] shrink-0" style={{ height: spreadRowH }}>

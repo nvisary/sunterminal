@@ -14,6 +14,7 @@ import { CandleChartWidget } from '../widgets/CandleChartWidget';
 import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
 import { useSyncStore, SYNC_GROUPS } from '../stores/sync.store';
+import { RightSidebar } from '../components/RightSidebar';
 import type { WidgetConfig, Layout } from '../stores/layout.store';
 
 function SyncDot({ widgetId }: { widgetId: string }) {
@@ -300,28 +301,35 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
             className="px-2 py-0.5 rounded text-[10px] text-gray-500 hover:text-gray-200 border border-[#2a2a3a] shrink-0"
           >Logs</button>
         )}
-        <span className="text-[10px] text-gray-600 shrink-0">Ctrl+L</span>
+        <button onClick={store.toggleSidebar}
+          className={`px-2 py-0.5 rounded text-[10px] border border-[#2a2a3a] shrink-0 ${
+            store.sidebarOpen ? 'text-gray-200 bg-[#1e1e3e]' : 'text-gray-500 hover:text-gray-200'
+          }`}
+        >Settings</button>
       </div>
 
-      {/* DnD Grid for active pane */}
-      <div ref={containerRef} className="flex-1 overflow-auto">
-        <GridLayout
-          key={pane.id}
-          layout={pane.layout as Layout}
-          width={containerWidth}
-          gridConfig={{ cols: 12, rowHeight: 40, margin: [4, 4], containerPadding: [4, 4], maxRows: Infinity }}
-          dragConfig={{ enabled: true, handle: '.drag-handle', bounded: false, threshold: 3 }}
-          onLayoutChange={onLayoutChange}
-          compactor={verticalCompactor}
-        >
-          {pane.widgets.map((widget) => (
-            <div key={widget.id}>
-              <WidgetWrapper widget={widget} onRemove={() => store.removeWidget(widget.id)}>
-                <WidgetContent widget={widget} />
-              </WidgetWrapper>
-            </div>
-          ))}
-        </GridLayout>
+      {/* Content: Grid + Sidebar */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        <div ref={containerRef} className="flex-1 overflow-auto min-w-0">
+          <GridLayout
+            key={pane.id}
+            layout={pane.layout as Layout}
+            width={containerWidth}
+            gridConfig={{ cols: 12, rowHeight: 40, margin: [4, 4], containerPadding: [4, 4], maxRows: Infinity }}
+            dragConfig={{ enabled: true, handle: '.drag-handle', bounded: false, threshold: 3 }}
+            onLayoutChange={onLayoutChange}
+            compactor={verticalCompactor}
+          >
+            {pane.widgets.map((widget) => (
+              <div key={widget.id}>
+                <WidgetWrapper widget={widget} onRemove={() => store.removeWidget(widget.id)}>
+                  <WidgetContent widget={widget} />
+                </WidgetWrapper>
+              </div>
+            ))}
+          </GridLayout>
+        </div>
+        <RightSidebar />
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts';
 import { wsClient, API_BASE } from '../lib/ws-client';
+import { EXCHANGES } from '../stores/sync.store';
 
 interface OHLCVCandle {
   time: number;
@@ -16,8 +17,6 @@ interface CandleChartWidgetProps {
   defaultExchange?: string;
   defaultSymbol?: string;
 }
-
-const EXCHANGES = ['bybit', 'binance', 'okx'];
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
 export function CandleChartWidget({ defaultExchange = 'bybit', defaultSymbol = 'BTC/USDT:USDT' }: CandleChartWidgetProps) {
