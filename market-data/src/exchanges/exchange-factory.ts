@@ -18,9 +18,14 @@ export async function createExchange(cfg: ExchangeConfig): Promise<ProExchange> 
     watchOrderBook: { limit: cfg.orderbookDepth },
   };
 
+  if (cfg.ccxtClass === "bybit") {
+    options.fetchMarkets = { types: ["spot", "linear", "inverse"] };
+  }
+
   const exchangeOpts: Record<string, unknown> = {
     options,
     enableRateLimit: true,
+    timeout: 30000,
   };
 
   if (cfg.apiKey) exchangeOpts.apiKey = cfg.apiKey;
