@@ -17,6 +17,51 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // POST /api/trade/limit — place raw limit order bypassing position-sizer (DOM clicks)
+    // body: { exchange, symbol, side: 'buy'|'sell', price, amount, reduceOnly?, postOnly? }
+    if (path === "/api/trade/limit" && method === "POST") {
+      const { exchange, symbol, side, price, amount, reduceOnly, postOnly } = body as {
+        exchange: string; symbol: string; side: "buy" | "sell";
+        price: number; amount: number; reduceOnly?: boolean; postOnly?: boolean;
+      };
+      if (!exchange || !symbol || !side || !price || !amount) {
+        json(res, 400, { error: "exchange, symbol, side, price, amount required" });
+        return true;
+      }
+      const params: Record<string, unknown> = {};
+      if (reduceOnly) params.reduceOnly = true;
+      if (postOnly) params.postOnly = true;
+      const result = await callRest(redis, exchange, "createOrder", [symbol, "limit", side, amount, price, params]);
+      if (result.success) json(res, 200, { ok: true, order: result.data });
+      else json(res, 502, { ok: false, error: result.error });
+      return true;
+    }
+
+    // DELETE /api/trade/order — cancel order
+    // body: { exchange, symbol, orderId }
+    if (path === "/api/trade/order" && method === "DELETE") {
+      const { exchange, symbol, orderId } = body as { exchange: string; symbol: string; orderId: string };
+      if (!exchange || !symbol || !orderId) {
+        json(res, 400, { error: "exchange, symbol, orderId required" });
+        return true;
+      }
+      const result = await callRest(redis, exchange, "cancelOrder", [orderId, symbol]);
+      if (result.success) json(res, 200, { ok: true, order: result.data });
+      else json(res, 502, { ok: false, error: result.error });
+      return true;
+    }
+
+    // GET /api/trade/open-orders/:exchange/:symbol — fetchOpenOrders for symbol
+    const openOrdersMatch = path.match(/^\/api\/trade\/open-orders\/([^/]+)\/(.+)$/);
+    if (openOrdersMatch && method === "GET") {
+      const exchange = openOrdersMatch[1]!;
+      const symbol = decodeURIComponent(openOrdersMatch[2]!);
+      const result = await callRest(redis, exchange, "fetchOpenOrders", [symbol]);
+      if (result.success) json(res, 200, result.data ?? []);
+      else json(res, 502, { error: result.error });
+      return true;
+    }
+
     // POST /api/trade/close/:id
     const closeMatch = path.match(/^\/api\/trade\/close\/(.+)$/);
     if (closeMatch && method === "POST") {
@@ -211,11 +256,45 @@ export function createTradeRoutes(redis: Redis) {
   };
 }
 
+async function callRest(
+  redis: Redis,
+  exchange: string,
+  method: string,
+  args: unknown[],
+  timeoutMs = 10_000,
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  const { randomUUID } = await import("node:crypto");
+  const reqId = randomUUID();
+  const replyTo = `ml:rest-response:${reqId}`;
+
+  await redis.xadd("cmd:rest-request", "MAXLEN", "~", "1000", "*",
+    "data", JSON.stringify({ method, exchange, args, replyTo }));
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await redis.xrevrange(replyTo, "+", "-", "COUNT", 1);
+    if (result.length > 0) {
+      await redis.del(replyTo);
+      const fields = result[0]![1];
+      const dataIdx = fields.indexOf("data");
+      if (dataIdx !== -1 && fields[dataIdx + 1]) {
+        const parsed = JSON.parse(fields[dataIdx + 1]!) as { success: boolean; data?: unknown; error?: string };
+        return parsed;
+      }
+      return { success: false, error: "empty reply" };
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await redis.del(replyTo);
+  logger.warn({ exchange, method }, "REST call timeout");
+  return { success: false, error: "timeout" };
+}
+
 function json(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(JSON.stringify(data));

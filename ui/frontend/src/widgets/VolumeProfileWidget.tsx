@@ -73,11 +73,12 @@ export function VolumeProfileWidget({ exchange, symbol }: { exchange: string; sy
   const lastTrade = trades[trades.length - 1];
   const lastPrice = lastTrade?.price ?? 0;
 
-  const { buckets, tickSize, pocPrice, maxVol, totalBuy, totalSell, tickOptions, autoIdx } = useMemo(() => {
+  const { buckets, tickSize, pocPrice, maxVol, totalBuy, totalSell, tickOptions, autoIdx, vah, val } = useMemo(() => {
     if (trades.length === 0) {
       return {
         buckets: [] as Bucket[], tickSize: 0, pocPrice: 0, maxVol: 0,
         totalBuy: 0, totalSell: 0, tickOptions: [] as number[], autoIdx: 0,
+        vah: 0, val: 0,
       };
     }
     let lo = Infinity, hi = -Infinity;
@@ -116,9 +117,31 @@ export function VolumeProfileWidget({ exchange, symbol }: { exchange: string; sy
       const total = b.buy + b.sell;
       if (total > max) { max = total; poc = key; }
     }
+    // Compute Value Area (70% of volume around POC)
+    let vahPrice = poc, valPrice = poc;
+    const totalVol = bVol + sVol;
+    if (totalVol > 0 && list.length > 0) {
+      const pocIdx = list.findIndex((b) => b.price === poc);
+      if (pocIdx !== -1) {
+        let acc = (list[pocIdx]!.buy + list[pocIdx]!.sell);
+        const target = totalVol * 0.7;
+        let hi2 = pocIdx, lo2 = pocIdx;
+        while (acc < target && (hi2 > 0 || lo2 < list.length - 1)) {
+          const up = hi2 > 0 ? (list[hi2 - 1]!.buy + list[hi2 - 1]!.sell) : -1;
+          const dn = lo2 < list.length - 1 ? (list[lo2 + 1]!.buy + list[lo2 + 1]!.sell) : -1;
+          if (up >= dn && hi2 > 0) { hi2--; acc += list[hi2]!.buy + list[hi2]!.sell; }
+          else if (lo2 < list.length - 1) { lo2++; acc += list[lo2]!.buy + list[lo2]!.sell; }
+          else break;
+        }
+        vahPrice = list[hi2]!.price; // higher price (top of ladder)
+        valPrice = list[lo2]!.price; // lower price (bottom of ladder)
+      }
+    }
+
     return {
       buckets: list, tickSize: tick, pocPrice: poc, maxVol: max,
       totalBuy: bVol, totalSell: sVol, tickOptions: options, autoIdx: auto,
+      vah: vahPrice, val: valPrice,
     };
   }, [trades, tickIdx]);
 
@@ -175,42 +198,54 @@ export function VolumeProfileWidget({ exchange, symbol }: { exchange: string; sy
             {buckets.map((b, i) => {
               const isPoc = b.price === pocPrice && maxVol > 0;
               const isLast = lastPrice >= b.price && lastPrice < b.price + tickSize;
+              const inVA = b.price <= vah && b.price >= val && maxVol > 0;
               const total = b.buy + b.sell;
-              const buyPct = maxVol > 0 ? (b.buy / maxVol) * 100 : 0;
-              const sellPct = maxVol > 0 ? (b.sell / maxVol) * 100 : 0;
+              const totalPct = maxVol > 0 ? (total / maxVol) * 100 : 0;
+              const buyShare = total > 0 ? b.buy / total : 0;
+              const delta = b.buy - b.sell;
+              const deltaAbs = Math.max(Math.abs(delta), 0.0001);
+              const deltaMax = maxVol; // normalize over full scale
+              const deltaPct = Math.min(100, (deltaAbs / deltaMax) * 100);
               return (
                 <div
                   key={i}
-                  className={`flex items-center h-[18px] px-1 text-[10px] font-mono relative ${isPoc ? 'bg-yellow-400/5' : ''} ${isLast ? 'ring-1 ring-inset ring-cyan-400/60' : ''}`}
-                  title={`${formatPrice(b.price)}\n↑ ${formatVol(b.buy)}  ↓ ${formatVol(b.sell)}`}
+                  className={`flex items-center h-[18px] px-1 text-[10px] font-mono relative ${
+                    isPoc ? 'bg-yellow-400/10' : inVA ? 'bg-purple-500/[0.06]' : ''
+                  } ${isLast ? 'ring-1 ring-inset ring-cyan-400/60' : ''}`}
+                  title={`${formatPrice(b.price)}\n↑ ${formatVol(b.buy)}  ↓ ${formatVol(b.sell)}  Δ ${delta >= 0 ? '+' : ''}${formatVol(delta)}`}
                 >
-                  {/* Price column */}
-                  <div className={`w-16 shrink-0 text-right pr-2 ${isPoc ? 'text-yellow-300' : isLast ? 'text-cyan-300' : 'text-gray-400'}`}>
+                  {/* Price column (left) */}
+                  <div className={`w-16 shrink-0 text-right pr-2 ${
+                    isPoc ? 'text-yellow-300 font-bold' : isLast ? 'text-cyan-300' : 'text-gray-400'
+                  }`}>
                     {formatPrice(b.price)}
                   </div>
 
-                  {/* Bars: buy bar (left-anchored) stacked above sell, or side by side in center strip */}
-                  <div className="flex-1 h-full flex items-center relative">
-                    {/* Buy bar grows from center-left to right */}
-                    <div className="absolute inset-y-[3px] left-1/2 right-0 flex items-center">
+                  {/* Stacked bar (left-anchored, extends right) */}
+                  <div className="flex-1 h-full relative">
+                    <div
+                      className="absolute inset-y-[3px] left-0 flex overflow-hidden rounded-sm"
+                      style={{ width: `${totalPct}%` }}
+                    >
                       <div
-                        className={`${isPoc ? 'bg-green-400' : 'bg-green-500/70'} h-full`}
-                        style={{ width: `${buyPct}%` }}
+                        className={isPoc ? 'bg-green-400' : 'bg-green-500/75'}
+                        style={{ width: `${buyShare * 100}%` }}
+                      />
+                      <div
+                        className={`flex-1 ${isPoc ? 'bg-red-400' : 'bg-red-500/75'}`}
                       />
                     </div>
-                    {/* Sell bar grows from center-right to left */}
-                    <div className="absolute inset-y-[3px] right-1/2 left-0 flex items-center justify-end">
+                    {/* Delta sub-bar (thin, below main) */}
+                    {total > 0 && (
                       <div
-                        className={`${isPoc ? 'bg-red-400' : 'bg-red-500/70'} h-full`}
-                        style={{ width: `${sellPct}%` }}
+                        className={`absolute bottom-0 left-0 h-[2px] ${delta >= 0 ? 'bg-green-300/80' : 'bg-red-300/80'}`}
+                        style={{ width: `${deltaPct}%` }}
                       />
-                    </div>
-                    {/* center divider */}
-                    <div className="absolute inset-y-0 left-1/2 w-px bg-[#1a1a2a]" />
+                    )}
                   </div>
 
-                  {/* Volume column */}
-                  <div className="w-14 shrink-0 text-right pl-2 text-gray-500">
+                  {/* Volume column (right) */}
+                  <div className={`w-14 shrink-0 text-right pl-2 tabular-nums ${isPoc ? 'text-yellow-200' : 'text-gray-500'}`}>
                     {total > 0 ? formatVol(total) : ''}
                   </div>
                 </div>
@@ -222,9 +257,10 @@ export function VolumeProfileWidget({ exchange, symbol }: { exchange: string; sy
 
       {/* Footer */}
       {trades.length > 0 && (
-        <div className="flex justify-between px-2 py-[2px] text-[9px] text-gray-600 font-mono shrink-0 border-t border-[#1a1a2a]">
-          <span>POC {formatPrice(pocPrice)}</span>
-          <span>{buckets.length} lvls @ {formatPrice(tickSize)}</span>
+        <div className="flex justify-between px-2 py-[2px] text-[9px] text-gray-600 font-mono shrink-0 border-t border-[#1a1a2a] gap-2">
+          <span className="text-yellow-400/80">POC {formatPrice(pocPrice)}</span>
+          <span className="text-purple-300/70">VA [{formatPrice(val)} — {formatPrice(vah)}]</span>
+          <span>{buckets.length}@{formatPrice(tickSize)}</span>
         </div>
       )}
     </div>

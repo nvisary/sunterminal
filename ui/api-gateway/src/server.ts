@@ -28,7 +28,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     });
     res.end();
@@ -41,7 +41,7 @@ const server = createServer(async (req, res) => {
 
   // Parse body for POST/PUT
   let body: Record<string, unknown> = {};
-  if (method === "POST" || method === "PUT") {
+  if (method === "POST" || method === "PUT" || method === "DELETE") {
     body = await parseBody(req);
   }
 

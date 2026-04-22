@@ -6,6 +6,8 @@ import { OrderBookWidget } from '../widgets/OrderBookWidget';
 import { PriceChartWidget } from '../widgets/PriceChartWidget';
 import { TradesWidget } from '../widgets/TradesWidget';
 import { VolumeProfileWidget } from '../widgets/VolumeProfileWidget';
+import { LiquidityHeatmapWidget } from '../widgets/LiquidityHeatmapWidget';
+import { HelpPopover } from '../widgets/help/HelpPopover';
 import { FundingWidget } from '../widgets/FundingWidget';
 import { VolatilityWidget } from '../widgets/VolatilityWidget';
 import { LevelsWidget } from '../widgets/LevelsWidget';
@@ -100,6 +102,7 @@ function WidgetWrapper({ widget, onRemove, children }: {
       <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
         <SyncDot widgetId={widget.id} />
         <span className="text-[10px] text-gray-500 flex-1 truncate">{widget.title}</span>
+        <HelpPopover widgetType={widget.type} />
         <button onClick={onRemove} className="text-[10px] text-gray-700 hover:text-red-400 px-1" title="Close widget">x</button>
       </div>
       <div className="flex-1 overflow-hidden">{children}</div>
@@ -108,7 +111,7 @@ function WidgetWrapper({ widget, onRemove, children }: {
 }
 
 // Widgets that respond to symbol sync
-const SYMBOL_WIDGETS = new Set(['orderbook', 'chart', 'candleChart', 'trades', 'tradeForm']);
+const SYMBOL_WIDGETS = new Set(['orderbook', 'chart', 'candleChart', 'trades', 'tradeForm', 'heatmap']);
 
 function WidgetContent({ widget }: { widget: WidgetConfig }) {
   const panels = usePanelsStore((s) => s.panels);
@@ -162,6 +165,8 @@ function WidgetContent({ widget }: { widget: WidgetConfig }) {
       return <TradesWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'volumeProfile':
       return <VolumeProfileWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+    case 'heatmap':
+      return <LiquidityHeatmapWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'funding':
       return <FundingWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
     case 'volatility':
