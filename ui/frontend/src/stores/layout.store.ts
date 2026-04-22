@@ -22,6 +22,7 @@ export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; 
   orderbook: { title: 'Order Book', defaultW: 4, defaultH: 8, minW: 3, minH: 4 },
   trades: { title: 'Tape', defaultW: 8, defaultH: 3, minW: 3, minH: 2 },
   volumeProfile: { title: 'Volume Profile', defaultW: 3, defaultH: 8, minW: 2, minH: 4 },
+  heatmap: { title: 'Liquidity Heatmap', defaultW: 6, defaultH: 7, minW: 4, minH: 4 },
   funding: { title: 'Funding', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
   volatility: { title: 'Volatility / ATR', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
   levels: { title: 'Key Levels', defaultW: 3, defaultH: 6, minW: 2, minH: 4 },
