@@ -161,6 +161,62 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // GET /api/markets/:exchange/:symbol/info — metadata for a specific symbol
+    const marketInfoMatch = path.match(/^\/api\/markets\/([^/]+)\/(.+)\/info$/);
+    if (marketInfoMatch && method === "GET") {
+      const exchange = marketInfoMatch[1]!;
+      const symbol = decodeURIComponent(marketInfoMatch[2]!);
+      const cached = await redis.get(`rest:markets:${exchange}`);
+      if (!cached) {
+        json(res, 404, { error: "markets not cached for exchange" });
+        return true;
+      }
+      const markets = JSON.parse(cached) as Array<{
+        symbol: string; base?: string; quote?: string; type?: string; active?: boolean;
+        precision?: { price?: number; amount?: number };
+        limits?: { amount?: { min?: number }; cost?: { min?: number } };
+        contractSize?: number; maker?: number; taker?: number;
+      }>;
+      const m = markets.find((mm) => mm.symbol === symbol);
+      if (!m) {
+        json(res, 404, { error: "symbol not found" });
+        return true;
+      }
+      // Normalize precision: ccxt may store either tickSize (TICK_SIZE mode) or decimal places.
+      // Heuristic: if value < 1, treat as tickSize; otherwise as decimal places.
+      const pricePrecision = m.precision?.price;
+      const amountPrecision = m.precision?.amount;
+      const tickSize =
+        typeof pricePrecision === "number"
+          ? pricePrecision < 1
+            ? pricePrecision
+            : Math.pow(10, -pricePrecision)
+          : null;
+      const amountStep =
+        typeof amountPrecision === "number"
+          ? amountPrecision < 1
+            ? amountPrecision
+            : Math.pow(10, -amountPrecision)
+          : null;
+      json(res, 200, {
+        symbol: m.symbol,
+        base: m.base ?? null,
+        quote: m.quote ?? null,
+        type: m.type ?? null,
+        active: m.active ?? true,
+        tickSize,
+        amountStep,
+        pricePrecision: pricePrecision ?? null,
+        amountPrecision: amountPrecision ?? null,
+        minQty: m.limits?.amount?.min ?? null,
+        minCost: m.limits?.cost?.min ?? null,
+        contractSize: m.contractSize ?? 1,
+        makerFee: m.maker ?? null,
+        takerFee: m.taker ?? null,
+      });
+      return true;
+    }
+
     // GET /api/markets/:exchange/search?q=... — search symbols
     const searchMatch = path.match(/^\/api\/markets\/([^/]+)\/search$/);
     if (searchMatch && method === "GET") {

@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { wsClient, API_BASE } from '../lib/ws-client';
 import { useMarketStore } from '../stores/market.store';
 import { useOrdersStore } from '../stores/orders.store';
-import { EXCHANGES } from '../stores/sync.store';
+import { useLayoutStore } from '../stores/layout.store';
+import { useMarketInfo } from '../stores/marketInfo.store';
 import type { OrderBook } from '../stores/market.store';
+import type { WidgetConfig } from '../stores/layout.store';
 import {
   useTradeAggregates, aggregateVP, computePocVA, computeTapeSpeed,
 } from './dom/analytics';
@@ -12,17 +14,30 @@ interface OrderBookWidgetProps {
   exchange: string;
   symbol: string;
   isActive?: boolean;
-  onChangeSymbol?: (symbol: string) => void;
-  onChangeExchange?: (exchange: string) => void;
+  /** Widget config — used for persisting per-widget settings (tickIdx, mode) into widget.props. */
+  widget?: WidgetConfig;
 }
 
-function getTickSteps(price: number): number[] {
+// Multipliers applied to the instrument's tickSize to build aggregation ladder.
+// Index 0 = raw tickSize; default selection lives at TICK_DEFAULT_IDX.
+const TICK_MULTIPLIERS = [1, 2, 5, 10, 25, 50, 100, 250] as const;
+const TICK_DEFAULT_IDX = 3; // ×10 — comfortable scalping default
+
+/** Heuristic-based fallback when marketInfo hasn't loaded yet. */
+function getTickStepsFromPrice(price: number): number[] {
   if (price > 10000) return [0.1, 0.5, 1, 5, 10, 50, 100];
   if (price > 1000) return [0.01, 0.05, 0.1, 0.5, 1, 5, 10];
   if (price > 100) return [0.01, 0.05, 0.1, 0.5, 1, 5];
   if (price > 10) return [0.001, 0.005, 0.01, 0.05, 0.1, 0.5];
   if (price > 1) return [0.0001, 0.001, 0.005, 0.01, 0.05, 0.1];
   return [0.00001, 0.0001, 0.001, 0.01];
+}
+
+function buildTickSteps(tickSize: number | null, fallbackPrice: number): number[] {
+  if (tickSize && tickSize > 0) {
+    return TICK_MULTIPLIERS.map((m) => roundTick(tickSize * m, tickSize));
+  }
+  return getTickStepsFromPrice(fallbackPrice);
 }
 
 function roundTick(value: number, tickSize: number): number {
@@ -61,7 +76,7 @@ interface Row {
   side: 'ask' | 'bid' | 'spread';
 }
 
-export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, onChangeExchange }: OrderBookWidgetProps) {
+export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBookWidgetProps) {
   const key = `${exchange}:${symbol}`;
   const orderbook = useMarketStore((s) => s.orderbooks.get(key));
   const setOrderbook = useMarketStore((s) => s.setOrderbook);
@@ -69,18 +84,28 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const cancelOrder = useOrdersStore((s) => s.cancel);
   const getOrders = useOrdersStore((s) => s.getBySymbol);
   const ordersMap = useOrdersStore((s) => s.orders); // subscribe for re-render
+  const updateWidgetProps = useLayoutStore((s) => s.updateWidgetProps);
+  const marketInfo = useMarketInfo(exchange, symbol);
 
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState<string[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [tickIdx, setTickIdx] = useState(0);
-  const [mode, setMode] = useState<DomMode>('dynamic');
+  const persisted = (widget?.props ?? {}) as {
+    tickIdx?: number; mode?: DomMode; virtual?: boolean;
+    showVP?: boolean; flashEnabled?: boolean; qty?: string;
+  };
+
+  const [tickIdx, setTickIdx] = useState<number>(persisted.tickIdx ?? TICK_DEFAULT_IDX);
+  const [mode, setMode] = useState<DomMode>(persisted.mode ?? 'dynamic');
   const [scrollOffset, setScrollOffset] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
-  const [qty, setQty] = useState('0.01');
-  const [virtual, setVirtual] = useState(true); // SAFE DEFAULT
-  const [showVP, setShowVP] = useState(true);
-  const [flashEnabled, setFlashEnabled] = useState(true);
+  const [qty, setQty] = useState<string>(persisted.qty ?? '0.01');
+  const [virtual, setVirtual] = useState<boolean>(persisted.virtual ?? true); // SAFE DEFAULT
+  const [showVP, setShowVP] = useState<boolean>(persisted.showVP ?? true);
+  const [flashEnabled, setFlashEnabled] = useState<boolean>(persisted.flashEnabled ?? true);
+
+  // Persist UI state to widget.props so it survives reloads / pane swaps.
+  useEffect(() => {
+    if (!widget?.id) return;
+    updateWidgetProps(widget.id, { tickIdx, mode, virtual, showVP, flashEnabled, qty });
+  }, [widget?.id, tickIdx, mode, virtual, showVP, flashEnabled, qty, updateWidgetProps]);
 
   const ladderRef = useRef<HTMLDivElement>(null);
   const [containerH, setContainerH] = useState(400);
@@ -116,18 +141,8 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
     }
   }, [mode]);
 
-  const doSearch = async (q: string) => {
-    if (!q) { setResults([]); return; }
-    try {
-      const res = await fetch(`${API_BASE}/api/markets/${exchange}/search?q=${encodeURIComponent(q)}`);
-      setResults(await res.json() as string[]);
-    } catch { setResults([]); }
-  };
-
-  const selectSymbol = (sym: string) => {
-    onChangeSymbol?.(sym);
-    setSearch(''); setResults([]); setSearching(false); setScrollOffset(0);
-  };
+  // Reset scroll position when symbol changes (different price scale).
+  useEffect(() => { setScrollOffset(0); }, [exchange, symbol]);
 
   const bids = orderbook?.bids ?? [];
   const asks = orderbook?.asks ?? [];
@@ -135,7 +150,10 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const bestBid = bids[0]?.[0] ?? 0;
   const midPrice = (bestBid && bestAsk) ? (bestBid + bestAsk) / 2 : (bestBid || bestAsk || 0);
 
-  const steps = getTickSteps(midPrice);
+  const steps = useMemo(
+    () => buildTickSteps(marketInfo?.tickSize ?? null, midPrice),
+    [marketInfo?.tickSize, midPrice],
+  );
   const tickSize = steps[Math.min(tickIdx, steps.length - 1)]!;
 
   const aggBids = aggregateLevels(bids, tickSize);
@@ -151,7 +169,6 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
   const bestAskTick = bestAsk > 0 ? roundTick(Math.ceil(bestAsk / tickSize) * tickSize, tickSize) : 0;
   const bestBidTick = bestBid > 0 ? roundTick(Math.floor(bestBid / tickSize) * tickSize, tickSize) : 0;
   const dp = tickSize >= 1 ? 0 : tickSize >= 0.1 ? 1 : tickSize >= 0.01 ? 2 : tickSize >= 0.001 ? 3 : 4;
-  const baseName = symbol.split('/')[0] ?? symbol;
 
   const rowH = 18;
   const spreadRowH = mode === 'static' ? 22 : 0;
@@ -252,60 +269,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
 
   return (
     <div
-      className={`bg-[#0c0c14] rounded border h-full flex flex-col ${isActive ? 'border-[#3a3a5a]' : 'border-[#1a1a2a]'}`}
+      className={`h-full flex flex-col ${isActive ? '' : ''}`}
       onWheel={handleWheel}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Header */}
+      {/* Toolbar (qty / virt / tape / settings) */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-[#1a1a2a] shrink-0">
-        {searching ? (
-          <div className="flex-1 relative">
-            <div className="flex gap-1">
-              <select value={exchange} onChange={(e) => onChangeExchange?.(e.target.value)}
-                className="bg-[#0a0a14] border border-[#2a2a3a] rounded px-1 py-0.5 text-[10px] text-gray-400 outline-none w-16"
-              >
-                {EXCHANGES.map((ex) => <option key={ex} value={ex}>{ex}</option>)}
-              </select>
-              <input autoFocus type="text" value={search}
-                onChange={(e) => { const v = e.target.value.toUpperCase(); setSearch(v); doSearch(v); }}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Escape') { setSearching(false); setSearch(''); setResults([]); }
-                  if (e.key === 'Enter' && search) {
-                    let r = results;
-                    if (!r.length) {
-                      const res = await fetch(`${API_BASE}/api/markets/${exchange}/search?q=${encodeURIComponent(search)}`);
-                      r = await res.json() as string[];
-                    }
-                    if (r.length) selectSymbol(r[0]!);
-                  }
-                }}
-                onBlur={() => setTimeout(() => { setSearching(false); setResults([]); }, 200)}
-                placeholder="Search..."
-                className="flex-1 bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-0.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-[#4a4a6a]"
-              />
-            </div>
-            {results.length > 0 && (
-              <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50">
-                {results.map((sym) => (
-                  <button key={sym} onMouseDown={(e) => { e.preventDefault(); selectSymbol(sym); }}
-                    className="w-full text-left px-2 py-1 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white"
-                  >{sym}</button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            <button onClick={() => setSearching(true)}
-              className="text-left text-xs font-bold text-gray-200 hover:text-white truncate"
-              title="Click to change symbol"
-            >
-              {baseName}
-              <span className="text-[10px] text-gray-600 ml-1">{exchange}</span>
-            </button>
-
-            {/* Qty input */}
-            <div className="flex items-center gap-0.5 ml-1">
+        {/* Qty input */}
+            <div className="flex items-center gap-0.5">
               <span className="text-[9px] text-gray-600 uppercase">Qty</span>
               <input
                 type="text"
@@ -397,8 +368,6 @@ export function OrderBookWidget({ exchange, symbol, isActive, onChangeSymbol, on
             <span className="text-[10px] text-gray-500 font-mono ml-0.5 tabular-nums">
               {midPrice > 0 ? midPrice.toFixed(dp) : '—'}
             </span>
-          </>
-        )}
       </div>
 
       {/* DOM Ladder */}
