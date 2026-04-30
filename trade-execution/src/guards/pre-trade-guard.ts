@@ -1,14 +1,9 @@
 import type { RedisBus } from "../bus/redis-bus.ts";
-import type { OrderRequest, PreTradeResult, GuardCheck, TradeConfig } from "../types/trade.types.ts";
-import { RiskSnapshotKeys, HedgeSnapshotKeys, MdSnapshotKeys } from "../bus/channels.ts";
+import type { OrderRequest, PreTradeResult, GuardCheck, TradeConfig, TradeMode } from "../types/trade.types.ts";
+import { RiskSnapshotKeys, HedgeSnapshotKeys, MdSnapshotKeys, SimSnapshotKeys } from "../bus/channels.ts";
 import pino from "pino";
 
 const logger = pino({ name: "pre-trade-guard" });
-
-interface DrawdownState {
-  isTradeBlocked: boolean;
-  currentLevel: string;
-}
 
 interface HedgeState {
   status: string;
@@ -30,17 +25,26 @@ interface FundingData {
   interval: number;
 }
 
+export interface GuardCtx {
+  mode: TradeMode;
+  accountId: string;
+  /** Free balance available for new trades (USDT). */
+  freeBalanceUSD?: number;
+  /** Required margin for the order (USDT). */
+  requiredMarginUSD?: number;
+}
+
 export class PreTradeGuard {
   private bus: RedisBus;
   private cfg: TradeConfig["guards"];
   private sizerCfg: TradeConfig["positionSizer"];
-  private openTradeCount: () => number;
+  private openTradeCount: (mode: TradeMode, accountId: string) => number;
 
   constructor(
     bus: RedisBus,
     cfg: TradeConfig["guards"],
     sizerCfg: TradeConfig["positionSizer"],
-    openTradeCount: () => number
+    openTradeCount: (mode: TradeMode, accountId: string) => number,
   ) {
     this.bus = bus;
     this.cfg = cfg;
@@ -48,11 +52,12 @@ export class PreTradeGuard {
     this.openTradeCount = openTradeCount;
   }
 
-  async check(request: OrderRequest): Promise<PreTradeResult> {
+  async check(request: OrderRequest, ctx: GuardCtx): Promise<PreTradeResult> {
     const checks = await Promise.all([
-      this.checkRiskEngineBlock(),
-      this.checkHedgeLock(),
-      this.checkMaxPositions(),
+      this.checkRiskBlock(ctx),
+      this.checkHedgeLock(ctx),
+      this.checkMaxPositions(ctx),
+      this.checkBalance(ctx),
       this.checkVolatilityRegime(request.exchange, request.symbol),
       this.checkLevelProximity(request.exchange, request.symbol, request.price),
       this.checkFundingCost(request.exchange, request.symbol),
@@ -70,37 +75,35 @@ export class PreTradeGuard {
     const allowed = blocks.length === 0;
 
     if (!allowed) {
-      logger.warn({ blocks: blocks.map((b) => b.message) }, "Trade blocked by pre-trade guard");
+      logger.warn({ mode: ctx.mode, blocks: blocks.map((b) => b.message) }, "Trade blocked by pre-trade guard");
     }
 
     return { allowed, blocks, warnings };
   }
 
-  private async checkRiskEngineBlock(): Promise<GuardCheck | null> {
+  private async checkRiskBlock(ctx: GuardCtx): Promise<GuardCheck | null> {
     if (this.cfg.riskEngineBlock === "off") return null;
 
-    const drawdown = await this.bus.getSnapshot<DrawdownState>("risk:state:peak-equity");
-    // Check via exposure snapshot which has equity info
-    const exposure = await this.bus.getSnapshot<{ equity: number }>(RiskSnapshotKeys.exposure);
-
-    // A simple heuristic: if no exposure data, can't determine — skip
-    if (!exposure) return null;
-
-    // Check drawdown state from snapshot
-    const ddState = await this.bus.getSnapshot<string>("risk:state:trade-blocked");
-    if (ddState === "true") {
+    const stateKey = ctx.mode === "live"
+      ? "risk:state:trade-blocked"
+      : SimSnapshotKeys.tradeBlocked(ctx.accountId);
+    const blocked = await this.bus.cacheGet(stateKey);
+    if (blocked === "true") {
       return {
         name: "riskEngineBlock",
         type: this.cfg.riskEngineBlock,
-        message: "Trading blocked by Risk Engine (drawdown threshold exceeded)",
+        message: ctx.mode === "live"
+          ? "Trading blocked by Risk Engine (drawdown threshold exceeded)"
+          : "Trading blocked: sim drawdown threshold exceeded",
       };
     }
-
     return null;
   }
 
-  private async checkHedgeLock(): Promise<GuardCheck | null> {
+  private async checkHedgeLock(ctx: GuardCtx): Promise<GuardCheck | null> {
     if (this.cfg.hedgeLock === "off") return null;
+    // Hedge engine only governs live trading; skip in sim
+    if (ctx.mode === "sim") return null;
 
     const hedgeState = await this.bus.getSnapshot<HedgeState>(HedgeSnapshotKeys.state);
     if (hedgeState?.status === "locked" || hedgeState?.status === "emergency") {
@@ -110,14 +113,13 @@ export class PreTradeGuard {
         message: `Trading locked by Hedge Engine (status: ${hedgeState.status})`,
       };
     }
-
     return null;
   }
 
-  private async checkMaxPositions(): Promise<GuardCheck | null> {
+  private async checkMaxPositions(ctx: GuardCtx): Promise<GuardCheck | null> {
     if (this.cfg.maxPositions === "off") return null;
 
-    const count = this.openTradeCount();
+    const count = this.openTradeCount(ctx.mode, ctx.accountId);
     if (count >= this.sizerCfg.maxOpenPositions) {
       return {
         name: "maxPositions",
@@ -125,7 +127,21 @@ export class PreTradeGuard {
         message: `Max open positions reached (${count}/${this.sizerCfg.maxOpenPositions})`,
       };
     }
+    return null;
+  }
 
+  private async checkBalance(ctx: GuardCtx): Promise<GuardCheck | null> {
+    if (this.cfg.balanceCheck === "off") return null;
+    if (ctx.requiredMarginUSD === undefined || ctx.freeBalanceUSD === undefined) return null;
+
+    const reserve = (ctx.freeBalanceUSD * (1 - this.sizerCfg.marginReserve / 100));
+    if (ctx.requiredMarginUSD > reserve) {
+      return {
+        name: "balanceCheck",
+        type: this.cfg.balanceCheck,
+        message: `Insufficient balance: need $${ctx.requiredMarginUSD.toFixed(2)}, available $${reserve.toFixed(2)}`,
+      };
+    }
     return null;
   }
 
@@ -143,15 +159,10 @@ export class PreTradeGuard {
         message: `Extreme volatility regime (ATR%: ${vol.atrPercent?.toFixed(2)})`,
       };
     }
-
     return null;
   }
 
-  private async checkLevelProximity(
-    exchange: string,
-    symbol: string,
-    price?: number
-  ): Promise<GuardCheck | null> {
+  private async checkLevelProximity(exchange: string, symbol: string, price?: number): Promise<GuardCheck | null> {
     if (this.cfg.levelProximity === "off" || !price) return null;
 
     const levels = await this.bus.getSnapshot<PriceLevel[]>(
@@ -162,7 +173,7 @@ export class PreTradeGuard {
 
     for (const level of levels) {
       const dist = Math.abs(price - level.price) / price;
-      if (dist < 0.003 && level.strength > 3) { // Within 0.3% of strong level
+      if (dist < 0.003 && level.strength > 3) {
         return {
           name: "levelProximity",
           type: this.cfg.levelProximity,
@@ -170,28 +181,23 @@ export class PreTradeGuard {
         };
       }
     }
-
     return null;
   }
 
   private async checkFundingCost(exchange: string, symbol: string): Promise<GuardCheck | null> {
     if (this.cfg.fundingCost === "off") return null;
 
-    const funding = await this.bus.getSnapshot<FundingData>(
-      MdSnapshotKeys.funding(exchange, symbol)
-    );
-
+    const funding = await this.bus.getSnapshot<FundingData>(MdSnapshotKeys.funding(exchange, symbol));
     if (!funding) return null;
 
     const annualizedCost = Math.abs(funding.rate) * (365 * 24 / funding.interval) * 100;
-    if (annualizedCost > 50) { // > 50% annualized
+    if (annualizedCost > 50) {
       return {
         name: "fundingCost",
         type: this.cfg.fundingCost,
         message: `High funding cost: ${(funding.rate * 100).toFixed(4)}% per ${funding.interval}h (${annualizedCost.toFixed(0)}% annualized)`,
       };
     }
-
     return null;
   }
 }

@@ -5,6 +5,7 @@ import Redis from "ioredis";
 import { RedisSubscriber } from "./ws/redis-subscriber.ts";
 import { WsProxy } from "./ws/ws-proxy.ts";
 import { createTradeRoutes } from "./routes/trade.routes.ts";
+import { createSimRoutes } from "./routes/sim.routes.ts";
 import pino from "pino";
 
 const logger = pino({ name: "api-gateway" });
@@ -21,6 +22,7 @@ const wsProxy = new WsProxy(subscriber, redis);
 
 // REST routes
 const tradeRoutes = createTradeRoutes(redis);
+const simRoutes = createSimRoutes(redis);
 
 // HTTP Server
 const server = createServer(async (req, res) => {
@@ -49,6 +51,19 @@ const server = createServer(async (req, res) => {
   if (path === "/health" && method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
     res.end(JSON.stringify({ status: "ok", clients: wsProxy.getClientCount() }));
+    return;
+  }
+
+  // Try sim routes first (more specific paths)
+  try {
+    const simHandled = await simRoutes(path, method, body, res);
+    if (simHandled) return;
+  } catch (err) {
+    logger.error({ err, path }, "Sim route handler error");
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify({ error: "Internal server error" }));
+    }
     return;
   }
 

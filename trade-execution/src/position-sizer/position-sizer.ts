@@ -1,8 +1,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import type { RedisBus } from "../bus/redis-bus.ts";
-import type { PositionSizeResult, TradeConfig } from "../types/trade.types.ts";
-import { MdStreamKeys, MdSnapshotKeys, RiskSnapshotKeys } from "../bus/channels.ts";
+import type { PositionSizeResult, TradeConfig, TradeMode } from "../types/trade.types.ts";
+import type { SimAccountSnapshot } from "../types/sim.types.ts";
+import { MdStreamKeys, MdSnapshotKeys, RiskSnapshotKeys, SimSnapshotKeys } from "../bus/channels.ts";
 import { calculatePositionSize, calculateAutoStop, calculateRiskReward } from "./risk-calculator.ts";
 import pino from "pino";
 
@@ -30,6 +31,8 @@ export class PositionSizer {
     takeProfit?: number;
     leverage?: number;
     riskPercent?: number;
+    mode?: TradeMode;
+    accountId?: string;
   }): Promise<PositionSizeResult> {
     const warnings: string[] = [];
     const leverage = params.leverage ?? this.cfg.defaultLeverage;
@@ -44,17 +47,27 @@ export class PositionSizer {
       return this.emptyResult("No price data available");
     }
 
-    // Get equity from exposure snapshot
-    const exposure = await this.bus.getSnapshot<{ equity: number }>(RiskSnapshotKeys.exposure);
-    const equity = exposure?.equity ?? 0;
-    if (equity <= 0) {
-      return this.emptyResult("No equity data available");
-    }
+    const mode: TradeMode = params.mode ?? "live";
+    let equity = 0;
+    let freeBalance = 0;
 
-    // Get free balance via REST command
-    const balance = await this.fetchBalance(params.exchange);
-    const free = balance?.free as Record<string, number> | undefined;
-    const freeBalance = free?.USDT ?? free?.usdt ?? equity;
+    if (mode === "sim") {
+      const accountId = params.accountId ?? "default";
+      const sim = await this.bus.getSnapshot<SimAccountSnapshot>(SimSnapshotKeys.exposure(accountId));
+      const acct = await this.bus.getSnapshot<SimAccountSnapshot>(SimSnapshotKeys.account(accountId));
+      equity = sim?.equity ?? acct?.cashUSDT ?? 0;
+      freeBalance = acct?.cashUSDT ?? equity;
+      if (equity <= 0) return this.emptyResult("Sim account not initialized");
+    } else {
+      // Live: equity from exposure snapshot, balance via REST
+      const exposure = await this.bus.getSnapshot<{ equity: number }>(RiskSnapshotKeys.exposure);
+      equity = exposure?.equity ?? 0;
+      if (equity <= 0) return this.emptyResult("No equity data available");
+
+      const balance = await this.fetchBalance(params.exchange);
+      const free = balance?.free as Record<string, number> | undefined;
+      freeBalance = free?.USDT ?? free?.usdt ?? equity;
+    }
 
     // Determine stop loss
     let stopLoss = params.stopLoss;
@@ -84,14 +97,14 @@ export class PositionSizer {
       leverage,
       maxPositionUSD: this.cfg.maxPositionUSD,
       marginReserve: this.cfg.marginReserve,
-      freeBalance: freeBalance as number,
+      freeBalance,
     });
 
     if (result.capped) {
       warnings.push(`Position capped to max $${this.cfg.maxPositionUSD}`);
     }
     if (!result.marginOk) {
-      warnings.push(`Insufficient margin: need $${result.requiredMargin.toFixed(2)}, available $${((freeBalance as number) * (1 - this.cfg.marginReserve / 100)).toFixed(2)}`);
+      warnings.push(`Insufficient margin: need $${result.requiredMargin.toFixed(2)}, available $${(freeBalance * (1 - this.cfg.marginReserve / 100)).toFixed(2)}`);
     }
 
     // Check volatility regime

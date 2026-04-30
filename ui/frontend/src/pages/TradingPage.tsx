@@ -17,6 +17,9 @@ import { ExposureWidget } from '../widgets/ExposureWidget';
 import { AlertsWidget } from '../widgets/AlertsWidget';
 import { HedgeWidget } from '../widgets/HedgeWidget';
 import { CandleChartWidget } from '../widgets/CandleChartWidget';
+import { SimPositionsWidget } from '../widgets/SimPositionsWidget';
+import { SimJournalWidget } from '../widgets/SimJournalWidget';
+import { ModeBadge } from '../components/ModeBadge';
 import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
 import { useSyncStore, SYNC_GROUPS } from '../stores/sync.store';
@@ -183,6 +186,10 @@ function WidgetContent({ widget }: { widget: WidgetConfig }) {
       return <AlertsWidget />;
     case 'hedge':
       return <HedgeWidget />;
+    case 'simPositions':
+      return <SimPositionsWidget />;
+    case 'simJournal':
+      return <SimJournalWidget />;
     default:
       return <div className="text-gray-600 text-xs p-2">Unknown: {widget.type}</div>;
   }
@@ -220,6 +227,7 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
       {/* Top bar */}
       <div className="flex items-center gap-1.5 px-2 py-1 bg-[#0d0d14] border-b border-[#1e1e2e] shrink-0 overflow-visible">
         <span className="text-sm font-bold text-white shrink-0">SunTerminal</span>
+        <ModeBadge />
         <span className="text-gray-700 shrink-0">|</span>
 
         {/* Pane tabs */}

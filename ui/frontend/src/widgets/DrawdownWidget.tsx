@@ -2,18 +2,24 @@ import { useEffect } from 'react';
 import { wsClient } from '../lib/ws-client';
 import type { DrawdownState } from '../stores/risk.store';
 import { useRiskStore } from '../stores/risk.store';
+import { useSettingsStore } from '../stores/settings.store';
+import { useSimStore, type SimDrawdown } from '../stores/sim.store';
 
 export function DrawdownWidget() {
-  const drawdown = useRiskStore((s) => s.drawdown);
-  const setDrawdown = useRiskStore((s) => s.setDrawdown);
+  const mode = useSettingsStore((s) => s.mode);
+  const liveDD = useRiskStore((s) => s.drawdown);
+  const setLiveDD = useRiskStore((s) => s.setDrawdown);
+  const simDD = useSimStore((s) => s.drawdown);
+  const setSimDD = useSimStore((s) => s.setDrawdown);
 
   useEffect(() => {
-    return wsClient.subscribe<DrawdownState>('risk:drawdown', (data) => {
-      setDrawdown(data);
-    });
-  }, [setDrawdown]);
+    if (mode === 'live') {
+      return wsClient.subscribe<DrawdownState>('risk:drawdown', (data) => setLiveDD(data));
+    }
+    return wsClient.subscribe<SimDrawdown>('sim:drawdown', (data) => setSimDD(data));
+  }, [mode, setLiveDD, setSimDD]);
 
-  const dd = drawdown;
+  const dd = mode === 'live' ? liveDD : simDD;
   const levelColor = {
     NORMAL: 'text-green-400',
     WARNING: 'text-amber-400',
@@ -22,9 +28,13 @@ export function DrawdownWidget() {
     MAX_PEAK: 'text-red-600 animate-pulse',
   }[dd?.currentLevel ?? 'NORMAL'] ?? 'text-gray-400';
 
+  const titleSuffix = mode === 'sim' ? <span className="text-yellow-400 ml-1">· SIM</span> : null;
+
   return (
     <div className="bg-[#111118] rounded border border-[#1e1e2e] p-3">
-      <div className="text-xs text-gray-400 mb-2 font-semibold uppercase tracking-wider">Drawdown</div>
+      <div className="text-xs text-gray-400 mb-2 font-semibold uppercase tracking-wider">
+        Drawdown{titleSuffix}
+      </div>
 
       {dd ? (
         <div className="space-y-2">

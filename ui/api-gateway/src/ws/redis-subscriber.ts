@@ -144,6 +144,9 @@ export class RedisSubscriber {
       key.startsWith("snapshot:") ||
       key.startsWith("risk:snapshot:") ||
       key.startsWith("hedge:snapshot:") ||
+      key.startsWith("sim:snapshot:") ||
+      key.startsWith("sim:account:") ||
+      key.startsWith("sim:positions:") ||
       key === "trade:open" ||
       key === "trade:stats"
     );
@@ -164,6 +167,20 @@ export class RedisSubscriber {
     };
 
     if (map[channel]) return map[channel]!;
+
+    // Sim channels — snapshots: sim:drawdown / sim:exposure / sim:account
+    // Streams: sim:journal, sim:orders, sim:equity-curve:{accountId}
+    if (channel === "sim:drawdown" || channel === "sim:exposure") {
+      const accountId = process.env.SIM_ACCOUNT_ID ?? "default";
+      return `sim:snapshot:${channel.split(":")[1]}:${accountId}`;
+    }
+    if (channel === "sim:account") {
+      const accountId = process.env.SIM_ACCOUNT_ID ?? "default";
+      return `sim:account:${accountId}`;
+    }
+    if (channel === "sim:journal") return "sim:journal";
+    if (channel === "sim:orders") return "sim:orders";
+    if (channel.startsWith("sim:equity-curve:")) return channel; // already includes accountId
 
     // Dynamic: orderbook:{exchange}:{symbol} -> md:orderbook:{exchange}:{symbol}
     if (channel.startsWith("orderbook:")) return `md:${channel}`;
