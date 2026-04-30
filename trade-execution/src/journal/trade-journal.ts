@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { RedisBus } from "../bus/redis-bus.ts";
-import type { TradeRecord, PnLStats, EquityPoint, OrderState } from "../types/trade.types.ts";
-import { TradeStreamKeys, TradeHashKeys, TradeStreamMaxLen, RiskSnapshotKeys, MdSnapshotKeys } from "../bus/channels.ts";
+import type { TradeRecord, PnLStats, EquityPoint, OrderState, TradeMode } from "../types/trade.types.ts";
+import {
+  RiskSnapshotKeys,
+  MdSnapshotKeys,
+  SimSnapshotKeys,
+  resolveJournalKeys,
+} from "../bus/channels.ts";
 import { calculatePnLStats } from "./pnl-calculator.ts";
 import pino from "pino";
 
@@ -19,37 +24,90 @@ interface ExposureSnapshot {
   equity: number;
 }
 
-interface DrawdownState {
-  dailyDrawdownPct: number;
+export interface JournalCtx {
+  mode: TradeMode;
+  accountId: string;
 }
 
 export class TradeJournal {
   private bus: RedisBus;
+  private ctx: JournalCtx;
+  private keys: ReturnType<typeof resolveJournalKeys>;
   private openTrades = new Map<string, TradeRecord>();
   private closedTrades: TradeRecord[] = [];
   private equityCurve: EquityPoint[] = [];
 
-  constructor(bus: RedisBus) {
+  constructor(bus: RedisBus, ctx: JournalCtx = { mode: "live", accountId: "live" }) {
     this.bus = bus;
+    this.ctx = ctx;
+    this.keys = resolveJournalKeys(ctx.mode, ctx.accountId);
+  }
+
+  get mode(): TradeMode {
+    return this.ctx.mode;
+  }
+
+  get accountId(): string {
+    return this.ctx.accountId;
+  }
+
+  /**
+   * Restore in-memory state from Redis (open positions hash + recent journal entries).
+   * Useful after restart so sim accounts and live journals survive.
+   */
+  async restore(closedLimit: number = 500): Promise<void> {
+    try {
+      const openRaw = await this.bus.client.hgetall(this.keys.openHash);
+      for (const [id, payload] of Object.entries(openRaw)) {
+        try {
+          const rec = JSON.parse(payload) as TradeRecord;
+          this.openTrades.set(id, rec);
+        } catch {
+          // skip corrupt entry
+        }
+      }
+
+      const closed = await this.bus.client.xrevrange(this.keys.journalStream, "+", "-", "COUNT", closedLimit);
+      const restored: TradeRecord[] = [];
+      for (const [, fields] of closed) {
+        const dataIdx = fields.indexOf("data");
+        if (dataIdx === -1 || !fields[dataIdx + 1]) continue;
+        try {
+          const rec = JSON.parse(fields[dataIdx + 1]!) as TradeRecord;
+          if (rec.closedAt && !this.openTrades.has(rec.id)) restored.push(rec);
+        } catch {
+          // ignore
+        }
+      }
+      // xrevrange returns newest first; reverse for chronological order
+      this.closedTrades = restored.reverse();
+
+      logger.info(
+        { mode: this.ctx.mode, accountId: this.ctx.accountId, open: this.openTrades.size, closed: this.closedTrades.length },
+        "Journal restored",
+      );
+    } catch (err) {
+      logger.warn({ err }, "Journal restore failed");
+    }
   }
 
   /**
    * Record a new trade from an order fill.
    */
-  async recordOpen(orderState: OrderState): Promise<TradeRecord> {
+  async recordOpen(orderState: OrderState, extra?: Partial<TradeRecord>): Promise<TradeRecord> {
     const req = orderState.request;
 
-    // Gather context from snapshots
     const vol = await this.bus.getSnapshot<VolatilityData>(
       RiskSnapshotKeys.volatility(req.exchange, req.symbol)
     );
     const funding = await this.bus.getSnapshot<FundingData>(
       MdSnapshotKeys.funding(req.exchange, req.symbol)
     );
-    const exposure = await this.bus.getSnapshot<ExposureSnapshot>(RiskSnapshotKeys.exposure);
 
     const record: TradeRecord = {
       id: randomUUID(),
+      mode: this.ctx.mode,
+      accountId: this.ctx.accountId,
       exchange: req.exchange,
       symbol: req.symbol,
       side: req.side === "buy" ? "long" : "short",
@@ -63,7 +121,7 @@ export class TradeJournal {
       netPnl: null,
       stopLoss: req.stopLoss ?? 0,
       takeProfit: req.takeProfit ?? null,
-      riskAmount: 0, // Filled by position sizer
+      riskAmount: 0,
       strategy: req.strategy,
       slippage: orderState.slippage,
       volatilityRegime: vol?.regime ?? "UNKNOWN",
@@ -74,19 +132,20 @@ export class TradeJournal {
       duration: null,
       tags: [],
       notes: "",
+      ...extra,
     };
 
     this.openTrades.set(record.id, record);
 
-    // Persist to Redis
-    await this.bus.client.hset(TradeHashKeys.open, record.id, JSON.stringify(record));
+    await this.bus.client.hset(this.keys.openHash, record.id, JSON.stringify(record));
     await this.bus.publish(
-      TradeStreamKeys.journal,
+      this.keys.journalStream,
       record as unknown as Record<string, unknown>,
-      TradeStreamMaxLen.journal
+      this.keys.journalMaxLen,
     );
 
     logger.info({
+      mode: record.mode,
       id: record.id,
       exchange: record.exchange,
       symbol: record.symbol,
@@ -104,7 +163,7 @@ export class TradeJournal {
   async recordClose(tradeId: string, exitPrice: number, fees: number = 0): Promise<TradeRecord | null> {
     const record = this.openTrades.get(tradeId);
     if (!record) {
-      logger.warn({ tradeId }, "Trade not found for close");
+      logger.warn({ mode: this.ctx.mode, tradeId }, "Trade not found for close");
       return null;
     }
 
@@ -113,40 +172,38 @@ export class TradeJournal {
     record.duration = record.closedAt - record.openedAt;
     record.fees += fees;
 
-    // Calculate PnL
     const priceDiff = record.side === "long"
       ? exitPrice - record.entryPrice
       : record.entryPrice - exitPrice;
     record.realizedPnl = (priceDiff / record.entryPrice) * record.size;
     record.netPnl = record.realizedPnl - record.fees - record.fundingPaid;
 
-    // Move to closed
     this.openTrades.delete(tradeId);
     this.closedTrades.push(record);
 
-    // Update Redis
-    await this.bus.client.hdel(TradeHashKeys.open, tradeId);
+    await this.bus.client.hdel(this.keys.openHash, tradeId);
     await this.bus.publish(
-      TradeStreamKeys.journal,
+      this.keys.journalStream,
       record as unknown as Record<string, unknown>,
-      TradeStreamMaxLen.journal
+      this.keys.journalMaxLen,
     );
 
-    // Update stats
     await this.publishStats();
 
-    // Update equity curve
-    const exposure = await this.bus.getSnapshot<ExposureSnapshot>(RiskSnapshotKeys.exposure);
-    if (exposure) {
-      this.equityCurve.push({ equity: exposure.equity, timestamp: Date.now() });
+    // Equity-curve point sourcing: live → exposure snapshot, sim → sim account snapshot
+    const equity = await this.fetchEquity();
+    if (equity !== null) {
+      const point: EquityPoint = { equity, timestamp: Date.now() };
+      this.equityCurve.push(point);
       await this.bus.publish(
-        TradeStreamKeys.equity,
-        { equity: exposure.equity, timestamp: Date.now() },
-        TradeStreamMaxLen.equity
+        this.keys.equityStream,
+        point as unknown as Record<string, unknown>,
+        this.keys.equityMaxLen,
       );
     }
 
     logger.info({
+      mode: this.ctx.mode,
       id: tradeId,
       symbol: record.symbol,
       pnl: record.netPnl?.toFixed(2),
@@ -156,12 +213,24 @@ export class TradeJournal {
     return record;
   }
 
+  /** Update fundingPaid on an open position (sim-only path; live ccxt fills supply this). */
+  async updateFunding(tradeId: string, deltaUSD: number): Promise<void> {
+    const rec = this.openTrades.get(tradeId);
+    if (!rec) return;
+    rec.fundingPaid += deltaUSD;
+    await this.bus.client.hset(this.keys.openHash, tradeId, JSON.stringify(rec));
+  }
+
   getOpenTrades(): TradeRecord[] {
     return [...this.openTrades.values()];
   }
 
   getOpenTradeCount(): number {
     return this.openTrades.size;
+  }
+
+  getOpenTrade(id: string): TradeRecord | undefined {
+    return this.openTrades.get(id);
   }
 
   getClosedTrades(): TradeRecord[] {
@@ -186,6 +255,15 @@ export class TradeJournal {
 
   private async publishStats(): Promise<void> {
     const stats = this.getStats();
-    await this.bus.client.hset(TradeHashKeys.stats, "all", JSON.stringify(stats));
+    await this.bus.client.hset(this.keys.statsHash, "all", JSON.stringify(stats));
+  }
+
+  private async fetchEquity(): Promise<number | null> {
+    if (this.ctx.mode === "live") {
+      const exposure = await this.bus.getSnapshot<ExposureSnapshot>(RiskSnapshotKeys.exposure);
+      return exposure?.equity ?? null;
+    }
+    const sim = await this.bus.getSnapshot<{ equity: number }>(SimSnapshotKeys.exposure(this.ctx.accountId));
+    return sim?.equity ?? null;
   }
 }

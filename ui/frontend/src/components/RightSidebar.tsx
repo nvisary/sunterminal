@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
 import { useSyncStore, SYNC_GROUPS, EXCHANGES } from '../stores/sync.store';
+import { useSettingsStore } from '../stores/settings.store';
+import { useSimStore } from '../stores/sim.store';
 import { API_BASE } from '../lib/ws-client';
+
+const API = `${API_BASE}/api`;
 
 function PaneSettings() {
   const store = useLayoutStore();
@@ -155,10 +159,174 @@ function SyncGroupsSettings() {
   );
 }
 
+function SimSettings() {
+  const mode = useSettingsStore((s) => s.mode);
+  const setMode = useSettingsStore((s) => s.setMode);
+  const initialEquityStored = useSettingsStore((s) => s.simInitialEquity);
+  const takerFeeStored = useSettingsStore((s) => s.simTakerFeePct);
+  const makerFeeStored = useSettingsStore((s) => s.simMakerFeePct);
+  const setSimConfig = useSettingsStore((s) => s.setSimConfig);
+  const account = useSimStore((s) => s.account);
+  const setAccount = useSimStore((s) => s.setAccount);
+  const [initialEquity, setInitialEquity] = useState(String(initialEquityStored));
+  const [takerFee, setTakerFee] = useState(String(takerFeeStored));
+  const [makerFee, setMakerFee] = useState(String(makerFeeStored));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/sim/account`).then((r) => r.json()).then((data) => {
+      if (data) setAccount(data);
+    }).catch(() => undefined);
+    fetch(`${API}/sim/config`).then((r) => r.json()).then((cfg) => {
+      if (!cfg) return;
+      if (cfg.initialEquity != null) { setInitialEquity(String(cfg.initialEquity)); setSimConfig({ simInitialEquity: cfg.initialEquity }); }
+      if (cfg.takerFeePct != null) { setTakerFee(String(cfg.takerFeePct)); setSimConfig({ simTakerFeePct: cfg.takerFeePct }); }
+      if (cfg.makerFeePct != null) { setMakerFee(String(cfg.makerFeePct)); setSimConfig({ simMakerFeePct: cfg.makerFeePct }); }
+    }).catch(() => undefined);
+  }, [setAccount, setSimConfig]);
+
+  const saveConfig = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const body = {
+        initialEquity: Number(initialEquity),
+        takerFeePct: Number(takerFee),
+        makerFeePct: Number(makerFee),
+      };
+      await fetch(`${API}/sim/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      setSimConfig({
+        simInitialEquity: body.initialEquity,
+        simTakerFeePct: body.takerFeePct,
+        simMakerFeePct: body.makerFeePct,
+      });
+      setMsg('Saved (applies on next reset)');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetAccount = async () => {
+    if (!confirm(`Reset sim account to $${initialEquity}? Open positions will be wiped.`)) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await fetch(`${API}/sim/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialEquity: Number(initialEquity) }),
+      });
+      setTimeout(() => {
+        fetch(`${API}/sim/account`).then((r) => r.json()).then((data) => {
+          if (data) setAccount(data);
+          setMsg('Account reset');
+        }).catch(() => undefined);
+      }, 400);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <div className="text-[9px] text-gray-500 uppercase mb-1">Mode</div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setMode('live')}
+            className={`flex-1 py-1.5 rounded text-[10px] font-bold border ${
+              mode === 'live'
+                ? 'bg-green-900/40 border-green-600 text-green-300'
+                : 'bg-[#0a0a14] border-[#2a2a3a] text-gray-500 hover:text-gray-300'
+            }`}
+          >LIVE</button>
+          <button
+            onClick={() => setMode('sim')}
+            className={`flex-1 py-1.5 rounded text-[10px] font-bold border ${
+              mode === 'sim'
+                ? 'bg-yellow-900/40 border-yellow-600 text-yellow-300'
+                : 'bg-[#0a0a14] border-[#2a2a3a] text-gray-500 hover:text-gray-300'
+            }`}
+          >SIM</button>
+        </div>
+      </div>
+
+      {account && (
+        <div className="bg-[#0a0a14] rounded border border-[#1a1a2a] p-2 text-[10px] text-gray-300">
+          <div className="flex justify-between"><span>Equity</span><span className="font-mono">${(account.equity ?? account.cashUSDT).toFixed(2)}</span></div>
+          <div className="flex justify-between"><span>Cash</span><span className="font-mono">${account.cashUSDT.toFixed(2)}</span></div>
+          <div className="flex justify-between"><span>Realized PnL</span>
+            <span className={`font-mono ${account.realizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {account.realizedPnl >= 0 ? '+' : ''}{account.realizedPnl.toFixed(2)}
+            </span>
+          </div>
+          <div className="flex justify-between"><span>Open</span><span className="font-mono">{account.openPositions ?? 0}</span></div>
+        </div>
+      )}
+
+      <div>
+        <div className="text-[9px] text-gray-500 uppercase mb-1">Initial equity (USD)</div>
+        <input
+          type="number"
+          value={initialEquity}
+          onChange={(e) => setInitialEquity(e.target.value)}
+          className="w-full bg-[#0a0a14] border border-[#2a2a3a] rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-[#4a4a6a]"
+        />
+      </div>
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <div className="text-[9px] text-gray-500 uppercase mb-1">Taker fee %</div>
+          <input
+            type="number"
+            step="0.01"
+            value={takerFee}
+            onChange={(e) => setTakerFee(e.target.value)}
+            className="w-full bg-[#0a0a14] border border-[#2a2a3a] rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-[#4a4a6a]"
+          />
+        </div>
+        <div className="flex-1">
+          <div className="text-[9px] text-gray-500 uppercase mb-1">Maker fee %</div>
+          <input
+            type="number"
+            step="0.01"
+            value={makerFee}
+            onChange={(e) => setMakerFee(e.target.value)}
+            className="w-full bg-[#0a0a14] border border-[#2a2a3a] rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-[#4a4a6a]"
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={saveConfig}
+          disabled={busy}
+          className="flex-1 py-1.5 rounded text-[10px] font-bold bg-[#1e1e3e] border border-[#3a3a5a] text-gray-200 hover:bg-[#252550] disabled:opacity-50"
+        >Save</button>
+        <button
+          onClick={resetAccount}
+          disabled={busy}
+          className="flex-1 py-1.5 rounded text-[10px] font-bold bg-yellow-900/40 border border-yellow-700 text-yellow-200 hover:bg-yellow-900/60 disabled:opacity-50"
+        >Reset Account</button>
+      </div>
+
+      {msg && <div className="text-[10px] text-center text-gray-500">{msg}</div>}
+
+      <div className="text-[9px] text-gray-600 leading-relaxed mt-1">
+        SIM mode runs market-data through a paper-trading engine. Positions, fees, funding and drawdown are simulated; nothing is sent to the exchange.
+      </div>
+    </div>
+  );
+}
+
 export function RightSidebar() {
   const sidebarOpen = useLayoutStore((s) => s.sidebarOpen);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
-  const [tab, setTab] = useState<'pane' | 'sync'>('sync');
+  const [tab, setTab] = useState<'pane' | 'sync' | 'sim'>('sim');
 
   return (
     <div
@@ -173,6 +341,12 @@ export function RightSidebar() {
           </div>
           <div className="flex gap-0.5 px-2 py-1.5 border-b border-[#1a1a2a] shrink-0">
             <button
+              onClick={() => setTab('sim')}
+              className={`px-2 py-0.5 rounded text-[10px] ${
+                tab === 'sim' ? 'bg-[#1e1e3e] text-white border border-[#3a3a5a]' : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >Sim</button>
+            <button
               onClick={() => setTab('pane')}
               className={`px-2 py-0.5 rounded text-[10px] ${
                 tab === 'pane' ? 'bg-[#1e1e3e] text-white border border-[#3a3a5a]' : 'text-gray-500 hover:text-gray-300'
@@ -183,10 +357,12 @@ export function RightSidebar() {
               className={`px-2 py-0.5 rounded text-[10px] ${
                 tab === 'sync' ? 'bg-[#1e1e3e] text-white border border-[#3a3a5a]' : 'text-gray-500 hover:text-gray-300'
               }`}
-            >Sync Groups</button>
+            >Sync</button>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
-            {tab === 'pane' ? <PaneSettings /> : <SyncGroupsSettings />}
+            {tab === 'sim' && <SimSettings />}
+            {tab === 'pane' && <PaneSettings />}
+            {tab === 'sync' && <SyncGroupsSettings />}
           </div>
         </>
       ) : (

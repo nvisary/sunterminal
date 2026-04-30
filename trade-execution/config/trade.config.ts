@@ -32,5 +32,19 @@ export const config: TradeConfig = {
     fundingCost: (env.GUARD_FUNDING_COST as GuardLevel) ?? "warning",
   },
 
+  sim: {
+    accountId: env.SIM_ACCOUNT_ID ?? "default",
+    initialEquity: Number(env.SIM_INITIAL_EQUITY) || 1000,
+    takerFeePct: Number(env.SIM_TAKER_FEE_PCT) || 0.05,
+    makerFeePct: Number(env.SIM_MAKER_FEE_PCT) || 0.02,
+    slippageFallbackPct: Number(env.SIM_SLIPPAGE_FALLBACK_PCT) || 0.05,
+    fundingIntervalMs: Number(env.SIM_FUNDING_INTERVAL_MS) || 60_000,
+    markToMarketIntervalMs: Number(env.SIM_MTM_INTERVAL_MS) || 1_000,
+    drawdownWarningPct: Number(env.SIM_DD_WARNING_PCT) || 2,
+    drawdownDangerPct: Number(env.SIM_DD_DANGER_PCT) || 4,
+    drawdownCriticalPct: Number(env.SIM_DD_CRITICAL_PCT) || 6,
+    drawdownMaxPeakPct: Number(env.SIM_DD_MAX_PEAK_PCT) || 15,
+  },
+
   logLevel: env.LOG_LEVEL ?? "info",
 };

@@ -61,8 +61,12 @@ export interface PreTradeResult {
 
 // ─── Trade Journal ────────────────────────────────────────────────
 
+export type TradeMode = "live" | "sim";
+
 export interface TradeRecord {
   id: string;
+  mode: TradeMode;
+  accountId: string;
   exchange: string;
   symbol: string;
   side: "long" | "short";
@@ -137,6 +141,19 @@ export interface TradeConfig {
     volatilityRegime: GuardLevel;
     levelProximity: GuardLevel;
     fundingCost: GuardLevel;
+  };
+  sim: {
+    accountId: string;
+    initialEquity: number;
+    takerFeePct: number; // e.g. 0.05 = 0.05%
+    makerFeePct: number; // e.g. 0.02 = 0.02%
+    slippageFallbackPct: number; // applied when orderbook walk impossible
+    fundingIntervalMs: number; // accrual cadence
+    markToMarketIntervalMs: number;
+    drawdownWarningPct: number;
+    drawdownDangerPct: number;
+    drawdownCriticalPct: number;
+    drawdownMaxPeakPct: number;
   };
   logLevel: string;
 }

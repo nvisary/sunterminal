@@ -33,6 +33,8 @@ export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; 
   exposure: { title: 'Exposure', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
   alerts: { title: 'Alerts', defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
   hedge: { title: 'Hedge Engine', defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
+  simPositions: { title: 'Sim Positions', defaultW: 6, defaultH: 4, minW: 4, minH: 2 },
+  simJournal: { title: 'Sim Journal', defaultW: 6, defaultH: 6, minW: 4, minH: 4 },
 };
 
 function makeDefaultPane(id: string, name: string): Pane {
