@@ -67,6 +67,7 @@ export class SimEngine {
   private fundingTimer: ReturnType<typeof setInterval> | null = null;
   private limitTimer: ReturnType<typeof setInterval> | null = null;
   private tradesLastIds = new Map<string, string>(); // streamKey -> last id
+  private closingTrades = new Set<string>(); // trades currently being closed by SL/TP
   private callbacks: SimEngineCallbacks;
   private running = false;
 
@@ -90,6 +91,7 @@ export class SimEngine {
     this.account = await SimAccount.load(this.bus, this.cfg.accountId, this.cfg.initialEquity);
     this.journal = new TradeJournal(this.bus, { mode: "sim", accountId: this.cfg.accountId });
     await this.journal.restore();
+    await this.consolidateLegacyPositions();
 
     // Initial publish so UI sees something on connect
     await this.markToMarket();
@@ -149,6 +151,42 @@ export class SimEngine {
     };
   }
 
+  /**
+   * One-time cleanup at start: if the open hash holds multiple trades on the
+   * same symbol (legacy data from before netting was enforced, or a previous
+   * race condition), close all of them at current mark price. The user gets
+   * realized PnL recorded; subsequent opens behave per netting rules.
+   */
+  private async consolidateLegacyPositions(): Promise<void> {
+    const open = this.journal.getOpenTrades();
+    if (open.length === 0) return;
+
+    const bySymbol = new Map<string, TradeRecord[]>();
+    for (const t of open) {
+      const k = `${t.exchange}:${t.symbol}`;
+      const arr = bySymbol.get(k) ?? [];
+      arr.push(t);
+      bySymbol.set(k, arr);
+    }
+
+    for (const [key, trades] of bySymbol) {
+      if (trades.length <= 1) continue;
+      const first = trades[0]!;
+      const ticker = await this.bus.getSnapshot<TickerSnapshot>(
+        MdSnapshotKeys.ticker(first.exchange, first.symbol),
+      );
+      const markPrice = ticker?.price ?? ticker?.last ?? first.entryPrice;
+      logger.warn({ key, count: trades.length, markPrice }, "Consolidating legacy positions: closing all at mark");
+
+      for (const t of trades) {
+        const closed = await this.journal.recordClose(t.id, markPrice, 0);
+        if (closed?.realizedPnl != null) {
+          await this.account.applyRealizedPnl(closed.realizedPnl);
+        }
+      }
+    }
+  }
+
   async resetAccount(initialEquity?: number): Promise<void> {
     // Wipe positions + open orders for this account, but keep historical journal stream
     const openHash = SimHashKeys.open(this.cfg.accountId);
@@ -184,11 +222,110 @@ export class SimEngine {
       return { orderState, trade: null };
     }
 
-    // Charge fee (perps: notional doesn't lock cash, only fees & realized PnL move it)
+    const trade = await this.applyFillWithNetting(request, orderState, riskAmount);
+    return { orderState, trade };
+  }
+
+  /**
+   * Apply a fill against the existing position for (exchange, symbol), implementing
+   * standard one-way (netting) account semantics:
+   *   - no position        → open new
+   *   - same direction     → average up (size grows, entry blended)
+   *   - opposite direction →
+   *       fillBase < existingBase  → reduce existing (partial close, realize prorata PnL)
+   *       fillBase = existingBase  → full close
+   *       fillBase > existingBase  → close existing, open opposite-side residual
+   * The caller passes a pre-computed orderState so this method works for both
+   * market opens and limit fills.
+   */
+  private async applyFillWithNetting(
+    request: OrderRequest,
+    orderState: OrderState,
+    riskAmount: number,
+  ): Promise<TradeRecord | null> {
+    // Charge full fee upfront — perps: notional doesn't lock cash, only fees & realized PnL move it.
     await this.account.chargeFee(orderState.fees);
 
-    const trade = await this.journal.recordOpen(orderState, { riskAmount });
-    return { orderState, trade };
+    const fillSide: "long" | "short" = request.side === "buy" ? "long" : "short";
+    const fillBase = orderState.filledAmount;
+    const fillPrice = orderState.averagePrice;
+    const fillNotional = fillBase * fillPrice;
+
+    const existing = this.journal.findOpenBySymbol(request.exchange, request.symbol);
+
+    // No existing position → just open
+    if (!existing) {
+      return this.journal.recordOpen(orderState, { riskAmount });
+    }
+
+    // Same direction → average up
+    if (existing.side === fillSide) {
+      const oldNotional = existing.size;
+      const newNotional = oldNotional + fillNotional;
+      const newAvgEntry = (existing.entryPrice * oldNotional + fillPrice * fillNotional) / newNotional;
+      await this.journal.updateOpen(existing.id, {
+        size: newNotional,
+        entryPrice: newAvgEntry,
+        fees: existing.fees + orderState.fees,
+        // Pull SL/TP from the latest fill if the new request has them, otherwise keep old.
+        ...(request.stopLoss != null ? { stopLoss: request.stopLoss } : {}),
+        ...(request.takeProfit != null ? { takeProfit: request.takeProfit } : {}),
+      });
+      return this.journal.getOpenTrade(existing.id) ?? null;
+    }
+
+    // Opposite direction → reduce / close / flip
+    const existingBase = existing.size / existing.entryPrice;
+    const epsilon = existingBase * 1e-6;
+
+    // Partial close: fill amount is smaller than existing position
+    if (fillBase < existingBase - epsilon) {
+      const closedNotionalAtEntry = fillBase * existing.entryPrice;
+      const remainingNotional = existing.size - closedNotionalAtEntry;
+      const priceDiff = existing.side === "long"
+        ? fillPrice - existing.entryPrice
+        : existing.entryPrice - fillPrice;
+      const realized = (priceDiff / existing.entryPrice) * closedNotionalAtEntry;
+      await this.account.applyRealizedPnl(realized);
+      await this.journal.updateOpen(existing.id, {
+        size: remainingNotional,
+        fees: existing.fees + orderState.fees,
+      });
+      logger.info({
+        symbol: existing.symbol, closedBase: fillBase, remainingBase: remainingNotional / existing.entryPrice,
+        realized: realized.toFixed(4),
+      }, "Sim partial close");
+      return this.journal.getOpenTrade(existing.id) ?? null;
+    }
+
+    // Full close: fill amount ~equals existing position
+    if (fillBase <= existingBase + epsilon) {
+      const closed = await this.journal.recordClose(existing.id, fillPrice, orderState.fees);
+      if (closed?.realizedPnl != null) {
+        await this.account.applyRealizedPnl(closed.realizedPnl);
+      }
+      return null;
+    }
+
+    // Flip: fill bigger than existing → close existing fully, open opposite-side residual
+    const closeFeesProrata = orderState.fees * (existingBase / fillBase);
+    const openFeesProrata = orderState.fees - closeFeesProrata;
+
+    const closed = await this.journal.recordClose(existing.id, fillPrice, closeFeesProrata);
+    if (closed?.realizedPnl != null) {
+      await this.account.applyRealizedPnl(closed.realizedPnl);
+    }
+
+    const remainingBase = fillBase - existingBase;
+    const remainderState: OrderState = {
+      ...orderState,
+      filledAmount: remainingBase,
+      fees: openFeesProrata,
+    };
+    logger.info({
+      symbol: existing.symbol, closedBase: existingBase, openedBase: remainingBase, newSide: fillSide,
+    }, "Sim flip");
+    return this.journal.recordOpen(remainderState, { riskAmount });
   }
 
   async closeMarket(tradeId: string): Promise<{ orderState: OrderState; trade: TradeRecord | null }> {
@@ -321,23 +458,10 @@ export class SimEngine {
     // Remove from open orders
     await this.bus.client.hdel(SimHashKeys.openOrders(this.cfg.accountId), order.id);
 
-    if (order.reduceOnly) {
-      // Closing an existing position via limit — find the trade by symbol
-      const opens = this.journal.getOpenTrades();
-      const trade = opens.find((t) => t.exchange === order.exchange && t.symbol === order.symbol);
-      if (!trade) {
-        logger.warn({ orderId: order.id }, "Limit reduce-only filled but no matching position");
-        return;
-      }
-      await this.account.chargeFee(fill.fees);
-      const closed = await this.journal.recordClose(trade.id, fill.averagePrice, fill.fees);
-      if (closed?.realizedPnl !== null && closed?.realizedPnl !== undefined) {
-        await this.account.applyRealizedPnl(closed.realizedPnl);
-      }
-      return;
-    }
-
-    // Opening order: build the OrderState/Request as if it filled at market
+    // Build the OrderState/Request as if it filled at market and run it through
+    // the same netting path the market opens use. This unifies behaviour: a
+    // BUY limit that crosses an existing SHORT will reduce/close/flip, just
+    // like a BUY market would. reduceOnly is just a hint — netting handles it.
     const request: OrderRequest = {
       exchange: order.exchange,
       symbol: order.symbol,
@@ -349,10 +473,10 @@ export class SimEngine {
       takeProfit: order.takeProfit,
       strategy: "limit",
       leverage: order.leverage,
+      reduceOnly: order.reduceOnly,
     };
     const orderState = this.fillToOrderState(request, fill);
-    await this.account.chargeFee(orderState.fees);
-    await this.journal.recordOpen(orderState, { riskAmount: order.riskAmount ?? 0 });
+    await this.applyFillWithNetting(request, orderState, order.riskAmount ?? 0);
   }
 
   /** Apply funding payments to all open perp positions for the configured account. */
@@ -394,17 +518,45 @@ export class SimEngine {
     const equity = this.account.cash + unrealized.total;
     await this.account.updatePeakAndDaily(equity);
 
-    // Persist marks back into open hash so the UI sees uPnL on each position
+    // Persist marks back into open hash so the UI sees uPnL on each position.
+    // Re-check that each trade is *still* open right before HSET — otherwise we'd
+    // race against a concurrent close (recordClose did HDEL, then HSET resurrects it).
     if (unrealized.byTrade.size > 0) {
       const openHash = SimHashKeys.open(this.cfg.accountId);
       const updates: string[] = [];
       for (const trade of open) {
         const u = unrealized.byTrade.get(trade.id);
         if (!u) continue;
+        if (!this.journal.getOpenTrade(trade.id)) continue; // closed mid-MTM
         const enriched = { ...trade, markPrice: u.markPrice, unrealizedPnl: u.unrealizedPnl };
         updates.push(trade.id, JSON.stringify(enriched));
       }
       if (updates.length > 0) await this.bus.client.hset(openHash, ...updates);
+    }
+
+    // SL/TP trigger: when mark price crosses the level, close at market.
+    // Fire-and-forget so we don't block the MTM loop; closingTrades guards
+    // against double-firing across consecutive ticks while closeMarket runs.
+    for (const t of open) {
+      if (this.closingTrades.has(t.id)) continue;
+      const u = unrealized.byTrade.get(t.id);
+      if (!u) continue;
+
+      let trigger: "SL" | "TP" | null = null;
+      if (t.side === "long") {
+        if (t.stopLoss && u.markPrice <= t.stopLoss) trigger = "SL";
+        else if (t.takeProfit && u.markPrice >= t.takeProfit) trigger = "TP";
+      } else {
+        if (t.stopLoss && u.markPrice >= t.stopLoss) trigger = "SL";
+        else if (t.takeProfit && u.markPrice <= t.takeProfit) trigger = "TP";
+      }
+      if (!trigger) continue;
+
+      logger.info({ tradeId: t.id, trigger, markPrice: u.markPrice, side: t.side }, "Sim SL/TP triggered");
+      this.closingTrades.add(t.id);
+      void this.closeMarket(t.id)
+        .catch((err) => logger.error({ err, tradeId: t.id, trigger }, "Sim SL/TP close failed"))
+        .finally(() => this.closingTrades.delete(t.id));
     }
 
     const dd = this.computeDrawdown(equity);

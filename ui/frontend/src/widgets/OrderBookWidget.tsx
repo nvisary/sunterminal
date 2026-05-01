@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { wsClient, API_BASE } from '../lib/ws-client';
 import { useMarketStore } from '../stores/market.store';
 import { useOrdersStore } from '../stores/orders.store';
+import { useSettingsStore } from '../stores/settings.store';
+import { useSimStore } from '../stores/sim.store';
 import { useLayoutStore } from '../stores/layout.store';
 import { useMarketInfo } from '../stores/marketInfo.store';
 import type { OrderBook } from '../stores/market.store';
@@ -9,6 +11,13 @@ import type { WidgetConfig } from '../stores/layout.store';
 import {
   useTradeAggregates, aggregateVP, computePocVA, computeTapeSpeed,
 } from './dom/analytics';
+import { HeatmapStrip, type DomSnapshot, type DomLadderRow } from './dom/HeatmapStrip';
+
+// Liquidity heatmap strip parameters — small window so the strip stays
+// "live" and reactive next to the current ladder.
+const HEATMAP_WINDOW_MS = 12_000;
+const HEATMAP_SNAP_MS = 250;
+const HEATMAP_W = 84;
 
 interface OrderBookWidgetProps {
   exchange: string;
@@ -83,13 +92,51 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const placeLimit = useOrdersStore((s) => s.placeLimit);
   const cancelOrder = useOrdersStore((s) => s.cancel);
   const getOrders = useOrdersStore((s) => s.getBySymbol);
+  const syncOrders = useOrdersStore((s) => s.syncOpenOrders);
   const ordersMap = useOrdersStore((s) => s.orders); // subscribe for re-render
+  const tradingMode = useSettingsStore((s) => s.mode);
+  const simPositions = useSimStore((s) => s.positions);
+  const simSymbolPositions = useMemo(
+    () => tradingMode === 'sim'
+      ? simPositions.filter((p) => p.exchange === exchange && p.symbol === symbol)
+      : [],
+    [tradingMode, simPositions, exchange, symbol],
+  );
+  // Aggregate same-symbol positions into a single net view so multiple opens
+  // (each click creates a new trade) don't make CLOSE feel broken.
+  const simPosition = useMemo(() => {
+    if (simSymbolPositions.length === 0) return undefined;
+    if (simSymbolPositions.length === 1) return simSymbolPositions[0];
+    let netSize = 0;
+    let weightedEntry = 0;
+    let totalUpnl = 0;
+    let mark = 0;
+    for (const p of simSymbolPositions) {
+      const signed = (p.side === 'long' ? 1 : -1) * p.size;
+      netSize += signed;
+      weightedEntry += p.entryPrice * Math.abs(signed);
+      totalUpnl += p.unrealizedPnl ?? 0;
+      mark = p.markPrice ?? mark;
+    }
+    const absSize = simSymbolPositions.reduce((a, p) => a + p.size, 0);
+    return {
+      ...simSymbolPositions[0]!,
+      id: '__agg__',
+      side: netSize >= 0 ? 'long' as const : 'short' as const,
+      entryPrice: absSize > 0 ? weightedEntry / absSize : simSymbolPositions[0]!.entryPrice,
+      size: absSize,
+      stopLoss: 0,
+      takeProfit: null,
+      markPrice: mark,
+      unrealizedPnl: totalUpnl,
+    };
+  }, [simSymbolPositions]);
   const updateWidgetProps = useLayoutStore((s) => s.updateWidgetProps);
   const marketInfo = useMarketInfo(exchange, symbol);
 
   const persisted = (widget?.props ?? {}) as {
-    tickIdx?: number; mode?: DomMode; virtual?: boolean;
-    showVP?: boolean; flashEnabled?: boolean; qty?: string;
+    tickIdx?: number; mode?: DomMode;
+    showVP?: boolean; showHeatmap?: boolean; flashEnabled?: boolean; qty?: string;
   };
 
   const [tickIdx, setTickIdx] = useState<number>(persisted.tickIdx ?? TICK_DEFAULT_IDX);
@@ -97,18 +144,23 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const [scrollOffset, setScrollOffset] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
   const [qty, setQty] = useState<string>(persisted.qty ?? '0.01');
-  const [virtual, setVirtual] = useState<boolean>(persisted.virtual ?? true); // SAFE DEFAULT
   const [showVP, setShowVP] = useState<boolean>(persisted.showVP ?? true);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(persisted.showHeatmap ?? false);
   const [flashEnabled, setFlashEnabled] = useState<boolean>(persisted.flashEnabled ?? true);
 
   // Persist UI state to widget.props so it survives reloads / pane swaps.
   useEffect(() => {
     if (!widget?.id) return;
-    updateWidgetProps(widget.id, { tickIdx, mode, virtual, showVP, flashEnabled, qty });
-  }, [widget?.id, tickIdx, mode, virtual, showVP, flashEnabled, qty, updateWidgetProps]);
+    updateWidgetProps(widget.id, { tickIdx, mode, showVP, showHeatmap, flashEnabled, qty });
+  }, [widget?.id, tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, updateWidgetProps]);
 
   const ladderRef = useRef<HTMLDivElement>(null);
   const [containerH, setContainerH] = useState(400);
+
+  // Liquidity heatmap strip — orderbook snapshots over a short window, drawn
+  // as a Bookmap-style ribbon to the left of the ladder.
+  const snapshotsRef = useRef<DomSnapshot[]>([]);
+  const rowsRef = useRef<DomLadderRow[]>([]);
 
   const { volAtPriceRef, recentTradesRef, printsRef, tick } = useTradeAggregates(exchange, symbol);
 
@@ -144,6 +196,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   // Reset scroll position when symbol changes (different price scale).
   useEffect(() => { setScrollOffset(0); }, [exchange, symbol]);
 
+  // Pull open orders for the current symbol on mount, mode-switch, or symbol-change.
+  // Poll periodically so fills/cancels from elsewhere reflect in the DOM.
+  useEffect(() => {
+    syncOrders(exchange, symbol);
+    const t = setInterval(() => syncOrders(exchange, symbol), 5_000);
+    return () => clearInterval(t);
+  }, [exchange, symbol, tradingMode, syncOrders]);
+
   const bids = orderbook?.bids ?? [];
   const asks = orderbook?.asks ?? [];
   const bestAsk = asks[0]?.[0] ?? 0;
@@ -160,6 +220,28 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const aggAsks = aggregateLevels(asks, tickSize);
   const vp = useMemo(() => aggregateVP(volAtPriceRef.current, tickSize), [tickSize, tick, volAtPriceRef]);
   const pocVA = useMemo(() => computePocVA(vp), [vp]);
+
+  // Heatmap snapshot pump. Samples on a fixed cadence so the ribbon advances
+  // even when the orderbook is quiet; drops snapshots older than the window.
+  useEffect(() => { snapshotsRef.current = []; }, [tickSize, exchange, symbol]);
+  useEffect(() => {
+    if (!showHeatmap) return;
+    const id = setInterval(() => {
+      const ob = useMarketStore.getState().orderbooks.get(key);
+      if (!ob) return;
+      const snap: DomSnapshot = {
+        t: Date.now(),
+        bids: aggregateLevels(ob.bids, tickSize),
+        asks: aggregateLevels(ob.asks, tickSize),
+      };
+      snapshotsRef.current.push(snap);
+      const cutoff = Date.now() - HEATMAP_WINDOW_MS;
+      while (snapshotsRef.current.length && snapshotsRef.current[0]!.t < cutoff) {
+        snapshotsRef.current.shift();
+      }
+    }, HEATMAP_SNAP_MS);
+    return () => clearInterval(id);
+  }, [showHeatmap, key, tickSize]);
 
   const tape = useMemo(
     () => computeTapeSpeed(recentTradesRef.current, 2000),
@@ -216,6 +298,10 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
     rows.push(...bidRows);
   }
 
+  // Mirror current ladder rows into a ref so the HeatmapStrip canvas can
+  // align cells with each visible price level without re-subscribing.
+  rowsRef.current = rows.map((r) => ({ price: r.price, side: r.side }));
+
   // Normalizers for bars
   const dataRows = rows.filter((r) => r.side !== 'spread');
   const maxDepth = Math.max(...dataRows.map((r) => Math.max(r.askSize, r.bidSize)), 0.001);
@@ -246,7 +332,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const handlePlaceLimit = (price: number, side: 'buy' | 'sell') => {
     const amount = Number(qty);
     if (!amount || amount <= 0) return;
-    placeLimit({ exchange, symbol, side, price, amount, virtual });
+    placeLimit({ exchange, symbol, side, price, amount });
   };
 
   const handleRowMouseDown = (e: React.MouseEvent, price: number) => {
@@ -294,16 +380,10 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
               />
             </div>
 
-            {/* Virtual/real toggle */}
-            <button
-              onClick={() => setVirtual((v) => !v)}
-              className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                virtual
-                  ? 'border-yellow-600/60 text-yellow-400 bg-yellow-900/20'
-                  : 'border-red-600/60 text-red-300 bg-red-900/20'
-              }`}
-              title={virtual ? 'VIRTUAL — orders do not hit exchange' : 'LIVE — real orders!'}
-            >{virtual ? 'VIRT' : 'LIVE'}</button>
+            {/* Quick legend so the user knows what each click does */}
+            <span className="text-[9px] text-gray-500 ml-1" title="Left-click on a price = limit BUY at that price · Right-click = limit SELL">
+              <span className="text-green-400">LMB</span>=BUY · <span className="text-red-400">RMB</span>=SELL
+            </span>
 
             <div className="flex-1" />
 
@@ -342,10 +422,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
                       ))}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1">
                     <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
                       <input type="checkbox" checked={showVP} onChange={(e) => setShowVP(e.target.checked)} />
                       Volume Profile
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+                      <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+                      Liquidity heatmap
                     </label>
                     <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
                       <input type="checkbox" checked={flashEnabled} onChange={(e) => setFlashEnabled(e.target.checked)} />
@@ -370,8 +454,96 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
             </span>
       </div>
 
-      {/* DOM Ladder */}
-      <div ref={ladderRef} className="flex-1 overflow-hidden flex flex-col font-mono text-[11px] leading-none select-none">
+      {/* Open limit orders banner — every resting order shown explicitly so the
+          user can see what's been placed even if it's far off-screen in the DOM. */}
+      {symOrders.length > 0 && (
+        <div className="flex flex-col gap-0.5 px-2 py-1 border-b border-blue-700/40 bg-blue-950/30 text-[10px] shrink-0">
+          {symOrders.map((o) => (
+            <div key={o.id} className="flex items-center gap-2">
+              <span className={`font-bold ${o.side === 'buy' ? 'text-green-400' : 'text-red-400'}`}>
+                {o.side === 'buy' ? 'BUY' : 'SELL'} {o.amount.toFixed(4)}
+              </span>
+              <span className="text-gray-400">
+                @ <span className="text-gray-200 font-mono">{o.price.toFixed(dp)}</span>
+              </span>
+              <span className={`text-[9px] uppercase ${
+                o.status === 'open' ? 'text-blue-400' :
+                o.status === 'pending' ? 'text-yellow-400' :
+                'text-gray-500'
+              }`}>{o.status}</span>
+              <div className="flex-1" />
+              <button
+                onClick={() => cancelOrder(o.id)}
+                className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:border-red-500 hover:text-red-300"
+                title="Cancel this order"
+              >×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sim position banner — gives immediate feedback that an order filled. */}
+      {simPosition && (
+        <div className="flex items-center gap-2 px-2 py-1 border-b border-yellow-700/40 bg-yellow-950/30 text-[10px] shrink-0">
+          <span className={`font-bold ${simPosition.side === 'long' ? 'text-green-400' : 'text-red-400'}`}>
+            {simPosition.side === 'long' ? 'LONG' : 'SHORT'} {simPosition.size.toFixed(4)}
+          </span>
+          <span className="text-gray-400">
+            @ <span className="text-gray-200 font-mono">{simPosition.entryPrice.toFixed(dp)}</span>
+          </span>
+          {simPosition.unrealizedPnl != null && (
+            <span className={`font-mono ${simPosition.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {simPosition.unrealizedPnl >= 0 ? '+' : ''}{simPosition.unrealizedPnl.toFixed(2)}$
+            </span>
+          )}
+          {simPosition.stopLoss > 0 && (
+            <span className="text-red-300/80">SL <span className="font-mono">{simPosition.stopLoss.toFixed(dp)}</span></span>
+          )}
+          {simPosition.takeProfit != null && (
+            <span className="text-green-300/80">TP <span className="font-mono">{simPosition.takeProfit.toFixed(dp)}</span></span>
+          )}
+          <div className="flex-1" />
+          <button
+            onClick={async () => {
+              const ids = simSymbolPositions.map((p) => p.id);
+              if (ids.length === 0) return;
+              // Tombstone + drop locally first so concurrent sim:exposure-driven
+              // refreshPositions can't resurrect them while the cmd is in flight.
+              useSimStore.getState().markPositionsClosing(ids);
+              try {
+                // Fire all closes in parallel — each goes through cmd:sim:trade:close.
+                await Promise.all(
+                  ids.map((id) =>
+                    fetch(`${API_BASE}/api/sim/trade/close/${encodeURIComponent(id)}`, { method: 'POST' })
+                      .then(async (res) => {
+                        if (!res.ok) console.error('sim close failed', id, res.status, await res.text());
+                      }),
+                  ),
+                );
+              } catch (err) {
+                console.error('sim close error', err);
+              }
+            }}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-red-700/60 text-red-200 bg-red-900/30 hover:bg-red-800/50 font-bold"
+            title={`Close all ${simSymbolPositions.length} sim position(s) on this symbol at market`}
+          >CLOSE{simSymbolPositions.length > 1 ? ` ALL (${simSymbolPositions.length})` : ''}</button>
+        </div>
+      )}
+
+      {/* DOM Ladder — Tiger-style: liquidity heatmap (optional) | volume cluster | size | price | orders */}
+      <div ref={ladderRef} className="flex-1 overflow-hidden flex font-mono text-[11px] leading-none select-none">
+        {showHeatmap && orderbook && (bids.length > 0 || asks.length > 0) && (
+          <div className="shrink-0 border-r border-[#1a1a2a]" style={{ width: HEATMAP_W }}>
+            <HeatmapStrip
+              snapshotsRef={snapshotsRef}
+              rowsRef={rowsRef}
+              rowH={rowH}
+              spreadRowH={spreadRowH}
+              windowMs={HEATMAP_WINDOW_MS}
+            />
+          </div>
+        )}
+        <div className="flex-1 flex flex-col min-w-0">
         {!orderbook || (bids.length === 0 && asks.length === 0) ? (
           <div className="flex-1 flex items-center justify-center text-gray-600 text-xs">Waiting for data...</div>
         ) : rows.map((row, i) => {
@@ -412,46 +584,151 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
 
           const priceOrders = ordersByPrice.get(row.price) ?? [];
 
+          // Position overlay: paint the band between entry and mark price (P&L zone),
+          // mark the entry / SL / TP rows. Only for the symbol that holds the position.
+          let posBand: 'profit' | 'loss' | null = null;
+          let isEntryRow = false;
+          let isStopRow = false;
+          let isTakeRow = false;
+          if (simPosition) {
+            const entry = simPosition.entryPrice;
+            const mark = simPosition.markPrice ?? entry;
+            const top = Math.max(entry, mark);
+            const bot = Math.min(entry, mark);
+            if (top - bot >= tickSize * 0.5
+                && row.price <= top + tickSize * 0.5
+                && row.price >= bot - tickSize * 0.5) {
+              const isProfit = simPosition.side === 'long' ? mark >= entry : mark <= entry;
+              posBand = isProfit ? 'profit' : 'loss';
+            }
+            isEntryRow = Math.abs(row.price - entry) < tickSize * 0.5;
+            if (simPosition.stopLoss > 0) {
+              isStopRow = Math.abs(row.price - simPosition.stopLoss) < tickSize * 0.5;
+            }
+            if (simPosition.takeProfit != null && simPosition.takeProfit > 0) {
+              isTakeRow = Math.abs(row.price - simPosition.takeProfit) < tickSize * 0.5;
+            }
+          }
+
           return (
             <div
               key={`${row.side}${i}`}
               className={`grid relative shrink-0 ${isBestBid || isBestAsk ? 'bg-white/[0.04]' : ''} ${isLarge ? 'animate-pulse' : ''}`}
               style={{
                 height: rowH,
+                // Tiger-style: all volume info sits left of price; orders right of it.
+                // Cols: TotalVP-bar | BuyVP | SellVP | Size(bid|ask unified) | Price | Orders
                 gridTemplateColumns: showVP
-                  ? '10% 15% 17% 16% 17% 15% 10%'
-                  : '0% 18% 20% 20% 20% 18% 4%',
+                  ? '8% 12% 12% 18% 26% 24%'
+                  : '0% 0% 0% 36% 32% 32%',
               }}
               onMouseDown={(e) => handleRowMouseDown(e, row.price)}
             >
-              {/* VP sidebar */}
-              {showVP && (
-                <div className="relative overflow-hidden">
-                  <div
-                    className={`absolute inset-y-0 left-0 ${isPOC ? 'bg-yellow-500/40' : inVA ? 'bg-purple-500/20' : 'bg-gray-500/15'}`}
-                    style={{ width: `${vpTotalPct}%` }}
-                  />
-                  {isPOC && (
-                    <div className="absolute inset-y-0 left-0 border-l-2 border-yellow-400" />
-                  )}
+              {/* Position overlay (P&L band + entry/SL/TP markers). Drawn first so
+                  it sits behind all column content but above the row background. */}
+              {posBand && (
+                <div className={`absolute inset-0 pointer-events-none z-0 ${
+                  posBand === 'profit' ? 'bg-green-500/15' : 'bg-red-500/15'
+                }`} />
+              )}
+              {isEntryRow && (
+                <div className="absolute inset-x-0 top-0 h-px bg-yellow-400/80 pointer-events-none z-10" />
+              )}
+              {isEntryRow && (
+                <div className="absolute left-0 top-0 bottom-0 px-0.5 flex items-center bg-yellow-500/80 text-[8px] font-bold text-black z-20 pointer-events-none">
+                  {simPosition?.side === 'long' ? 'L' : 'S'}
+                </div>
+              )}
+              {isStopRow && (
+                <div className="absolute inset-x-0 top-1/2 h-px bg-red-500/80 pointer-events-none z-10" />
+              )}
+              {isStopRow && (
+                <div className="absolute right-0 top-0 bottom-0 px-0.5 flex items-center bg-red-600/70 text-[8px] font-bold text-white z-20 pointer-events-none">
+                  SL
+                </div>
+              )}
+              {isTakeRow && (
+                <div className="absolute inset-x-0 top-1/2 h-px bg-green-500/80 pointer-events-none z-10" />
+              )}
+              {isTakeRow && (
+                <div className="absolute right-0 top-0 bottom-0 px-0.5 flex items-center bg-green-600/70 text-[8px] font-bold text-white z-20 pointer-events-none">
+                  TP
                 </div>
               )}
 
-              {/* Buy VP at price */}
-              <div className="relative overflow-hidden pr-1 flex items-center justify-end">
-                <div className="absolute inset-y-0 left-0 bg-green-500/10" style={{ width: `${vpBuyPct}%` }} />
-                <span className="relative z-10 text-green-600/80 tabular-nums text-[10px]">{fmtVol(row.buyVp)}</span>
+              {/* Open limit orders sitting at this price — full-width band so they're impossible to miss. */}
+              {priceOrders.length > 0 && (() => {
+                const first = priceOrders[0]!;
+                const totalAmt = priceOrders.reduce((a, o) => a + o.amount, 0);
+                const isBuy = first.side === 'buy';
+                return (
+                  <>
+                    <div
+                      className={`absolute inset-x-0 top-1/2 h-[2px] pointer-events-none z-10 ${
+                        isBuy ? 'bg-green-400' : 'bg-red-400'
+                      }`}
+                    />
+                    <div
+                      className={`absolute left-0 top-0 bottom-0 px-1 flex items-center text-[9px] font-bold z-20 pointer-events-none ${
+                        isBuy ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+                      }`}
+                    >
+                      {isBuy ? 'BUY' : 'SELL'} {fmtVol(totalAmt)}
+                    </div>
+                  </>
+                );
+              })()}
+
+              {/* TotalVP heatmap-style sidebar (POC / VA highlight). Width 0 when showVP=false. */}
+              <div className="relative overflow-hidden">
+                {showVP && (
+                  <>
+                    <div
+                      className={`absolute inset-y-0 left-0 ${isPOC ? 'bg-yellow-500/40' : inVA ? 'bg-purple-500/20' : 'bg-gray-500/15'}`}
+                      style={{ width: `${vpTotalPct}%` }}
+                    />
+                    {isPOC && (
+                      <div className="absolute inset-y-0 left-0 border-l-2 border-yellow-400" />
+                    )}
+                  </>
+                )}
               </div>
 
-              {/* Bid size */}
+              {/* Buy VP at price */}
               <div className="relative overflow-hidden pr-1 flex items-center justify-end">
-                {!isAsk && row.bidSize > 0 && (
-                  <div className="absolute inset-y-0 right-0 bg-green-500/25" style={{ width: `${depthPct}%` }} />
+                {showVP && (
+                  <>
+                    <div className="absolute inset-y-0 left-0 bg-green-500/10" style={{ width: `${vpBuyPct}%` }} />
+                    <span className="relative z-10 text-green-600/80 tabular-nums text-[10px]">{fmtVol(row.buyVp)}</span>
+                  </>
+                )}
+              </div>
+
+              {/* Sell VP at price — same orientation as Buy so the eye can scan one column */}
+              <div className="relative overflow-hidden pr-1 flex items-center justify-end">
+                {showVP && (
+                  <>
+                    <div className="absolute inset-y-0 left-0 bg-red-500/10" style={{ width: `${vpSellPct}%` }} />
+                    <span className="relative z-10 text-red-500/80 tabular-nums text-[10px]">{fmtVol(row.sellVp)}</span>
+                  </>
+                )}
+              </div>
+
+              {/* Size — unified bid/ask column. Color follows the side; bar grows from
+                  the price edge (right) leftward, so liquidity "pushes against" price. */}
+              <div className="relative overflow-hidden pr-1 flex items-center justify-end">
+                {curSize > 0 && (
+                  <div
+                    className={`absolute inset-y-0 right-0 ${isAsk ? 'bg-red-500/25' : 'bg-green-500/25'}`}
+                    style={{ width: `${depthPct}%` }}
+                  />
                 )}
                 <span
-                  className={`relative z-10 tabular-nums ${isAsk ? 'text-transparent' : 'text-green-300'} ${isBestBid ? 'font-bold' : ''}`}
+                  className={`relative z-10 tabular-nums ${
+                    isAsk ? 'text-red-300' : 'text-green-300'
+                  } ${(isBestBid || isBestAsk) ? 'font-bold' : ''}`}
                 >
-                  {!isAsk && row.bidSize > 0 ? fmtVol(row.bidSize) : ''}
+                  {curSize > 0 ? fmtVol(curSize) : ''}
                 </span>
               </div>
 
@@ -470,24 +747,6 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
                 <span className="relative z-10">{row.price.toFixed(dp)}</span>
               </div>
 
-              {/* Ask size */}
-              <div className="relative overflow-hidden pl-1 flex items-center">
-                {isAsk && row.askSize > 0 && (
-                  <div className="absolute inset-y-0 left-0 bg-red-500/25" style={{ width: `${depthPct}%` }} />
-                )}
-                <span
-                  className={`relative z-10 tabular-nums ${!isAsk ? 'text-transparent' : 'text-red-300'} ${isBestAsk ? 'font-bold' : ''}`}
-                >
-                  {isAsk && row.askSize > 0 ? fmtVol(row.askSize) : ''}
-                </span>
-              </div>
-
-              {/* Sell VP at price */}
-              <div className="relative overflow-hidden pl-1 flex items-center">
-                <div className="absolute inset-y-0 right-0 bg-red-500/10" style={{ width: `${vpSellPct}%` }} />
-                <span className="relative z-10 text-red-500/70 tabular-nums text-[10px]">{fmtVol(row.sellVp)}</span>
-              </div>
-
               {/* Orders column */}
               <div className="relative flex items-center justify-center gap-0.5">
                 {priceOrders.map((o) => (
@@ -495,12 +754,12 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
                     key={o.id}
                     onMouseDown={(e) => handleOrderClick(e, o.id)}
                     onContextMenu={(e) => handleOrderClick(e, o.id)}
-                    title={`${o.side.toUpperCase()} ${o.amount} @ ${o.price} ${o.virtual ? '(virtual)' : ''} — click to cancel`}
+                    title={`${o.side.toUpperCase()} ${o.amount} @ ${o.price} ${o.mode === 'sim' ? '(sim)' : ''} — click to cancel`}
                     className={`text-[9px] px-1 py-0 rounded border leading-tight ${
                       o.side === 'buy'
                         ? 'border-green-600/60 text-green-300 bg-green-900/30'
                         : 'border-red-600/60 text-red-300 bg-red-900/30'
-                    } ${o.virtual ? 'opacity-70 border-dashed' : ''} hover:bg-red-600/40 hover:text-white`}
+                    } ${o.mode === 'sim' ? 'opacity-80 border-dashed' : ''} hover:bg-red-600/40 hover:text-white`}
                   >
                     {fmtVol(o.amount)}
                   </button>
@@ -509,6 +768,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

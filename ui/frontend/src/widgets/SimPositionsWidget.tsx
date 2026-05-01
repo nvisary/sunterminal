@@ -7,8 +7,18 @@ const API = `${API_BASE}/api`;
 async function refreshPositions(): Promise<void> {
   try {
     const res = await fetch(`${API}/sim/positions`);
-    const data = (await res.json()) as SimPosition[];
-    useSimStore.getState().setPositions(data);
+    const data = (await res.json()) as Array<SimPosition & { closedAt?: number | null }>;
+    // Defensive against stale entries lingering in the sim:positions hash after a
+    // close: drop anything with closedAt and dedupe by id.
+    const seen = new Set<string>();
+    const clean: SimPosition[] = [];
+    for (const p of data) {
+      if (p.closedAt) continue;
+      if (!p.id || seen.has(p.id)) continue;
+      seen.add(p.id);
+      clean.push(p);
+    }
+    useSimStore.getState().setPositions(clean);
   } catch {
     // ignore
   }
@@ -30,10 +40,11 @@ export function SimPositionsWidget() {
 
   const closePosition = async (id: string) => {
     setClosing(id);
+    // Tombstone first: blocks the in-flight 1s sim:exposure WS refresh from
+    // re-inserting the position before the cmd is processed by sim-engine.
+    useSimStore.getState().markPositionsClosing([id]);
     try {
       await fetch(`${API}/sim/trade/close/${id}`, { method: 'POST' });
-      // Optimistic: refresh shortly
-      setTimeout(refreshPositions, 500);
     } finally {
       setClosing(null);
     }

@@ -123,6 +123,8 @@ export const CmdStreamKeys = {
   simOpen: "cmd:sim:trade:open",
   simClose: "cmd:sim:trade:close",
   simCloseAll: "cmd:sim:trade:close-all",
+  simLimit: "cmd:sim:trade:limit",
+  simCancel: "cmd:sim:trade:cancel",
   simReset: "cmd:sim:reset",
   simConfig: "cmd:sim:config",
 } as const;
