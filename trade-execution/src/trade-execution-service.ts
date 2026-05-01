@@ -131,6 +131,41 @@ export class TradeExecutionService {
         await this.closeSimTrade(t.id);
       }
     });
+    this.cmdConsumer.on(CmdStreamKeys.simLimit, async (data) => {
+      try {
+        const { exchange, symbol, side, price, amount, reduceOnly, orderId } = data as {
+          exchange: string; symbol: string; side: "buy" | "sell";
+          price: number; amount: number; reduceOnly?: boolean; orderId?: string;
+        };
+        if (!exchange || !symbol || !side || !price || !amount) {
+          logger.warn({ data }, "sim limit missing required fields");
+          return;
+        }
+        const { randomUUID } = await import("node:crypto");
+        await this.simEngine.placeLimit({
+          id: orderId ?? randomUUID(),
+          accountId: this.simEngine.getAccountId(),
+          exchange,
+          symbol,
+          side,
+          price,
+          amount,
+          reduceOnly: reduceOnly ?? false,
+          stopLoss: undefined,
+          takeProfit: undefined,
+          leverage: 1,
+          riskAmount: 0,
+          createdAt: Date.now(),
+        });
+      } catch (err) {
+        logger.error({ err }, "sim limit failed");
+      }
+    });
+    this.cmdConsumer.on(CmdStreamKeys.simCancel, async (data) => {
+      const { orderId } = data as { orderId: string };
+      if (!orderId) return;
+      await this.simEngine.cancelLimit(orderId);
+    });
     this.cmdConsumer.on(CmdStreamKeys.simReset, async (data) => {
       const { initialEquity } = data as { initialEquity?: number };
       await this.simEngine.resetAccount(initialEquity);

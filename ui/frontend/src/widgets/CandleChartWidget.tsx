@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts';
 import { wsClient, API_BASE } from '../lib/ws-client';
-import { EXCHANGES } from '../stores/sync.store';
 
 interface OHLCVCandle {
   time: number;
@@ -14,21 +13,16 @@ interface OHLCVCandle {
 }
 
 interface CandleChartWidgetProps {
-  defaultExchange?: string;
-  defaultSymbol?: string;
+  exchange: string;
+  symbol: string;
 }
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-export function CandleChartWidget({ defaultExchange = 'bybit', defaultSymbol = 'BTC/USDT:USDT' }: CandleChartWidgetProps) {
+export function CandleChartWidget({ exchange, symbol }: CandleChartWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-  const [exchange, setExchange] = useState(defaultExchange);
-  const [symbol, setSymbol] = useState(defaultSymbol);
   const [timeframe, setTimeframe] = useState('1h');
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState<string[]>([]);
-  const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Create chart
@@ -142,78 +136,15 @@ export function CandleChartWidget({ defaultExchange = 'bybit', defaultSymbol = '
     return unsub;
   }, [exchange, symbol, timeframe]);
 
-  const doSearch = async (q: string) => {
-    if (!q) { setResults([]); return; }
-    try {
-      const res = await fetch(`${API_BASE}/api/markets/${exchange}/search?q=${encodeURIComponent(q)}`);
-      setResults(await res.json() as string[]);
-    } catch { setResults([]); }
-  };
-
-  const selectSymbol = (sym: string) => {
-    setSymbol(sym);
-    setSearch('');
-    setResults([]);
-    setSearching(false);
-  };
-
-  const baseName = symbol.split('/')[0] ?? symbol;
-
   return (
     <div className="h-full flex flex-col">
-      {/* Toolbar */}
+      {/* Toolbar — timeframe only; symbol is controlled by WidgetWrapper */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-[#1a1a2a] bg-[#0a0a10] shrink-0">
-        {searching ? (
-          <div className="flex-1 relative">
-            <div className="flex gap-1">
-              <select value={exchange} onChange={(e) => setExchange(e.target.value)}
-                className="bg-[#0a0a14] border border-[#2a2a3a] rounded px-1 py-0.5 text-[10px] text-gray-400 outline-none w-16"
-              >
-                {EXCHANGES.map((ex) => <option key={ex} value={ex}>{ex}</option>)}
-              </select>
-              <input autoFocus type="text" value={search}
-                onChange={(e) => { const v = e.target.value.toUpperCase(); setSearch(v); doSearch(v); }}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Escape') { setSearching(false); setSearch(''); setResults([]); }
-                  if (e.key === 'Enter' && search) {
-                    let r = results;
-                    if (!r.length) { const res = await fetch(`${API_BASE}/api/markets/${exchange}/search?q=${encodeURIComponent(search)}`); r = await res.json() as string[]; }
-                    if (r.length) selectSymbol(r[0]!);
-                  }
-                }}
-                onBlur={() => setTimeout(() => { setSearching(false); setResults([]); }, 200)}
-                placeholder="Search..."
-                className="flex-1 bg-[#0a0a14] border border-[#2a2a3a] rounded px-1.5 py-0.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-[#4a4a6a]"
-              />
-            </div>
-            {results.length > 0 && (
-              <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50">
-                {results.map((sym) => (
-                  <button key={sym} onMouseDown={(e) => { e.preventDefault(); selectSymbol(sym); }}
-                    className="w-full text-left px-2 py-1 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white"
-                  >{sym}</button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            <button onClick={() => setSearching(true)}
-              className="text-xs font-bold text-gray-200 hover:text-white"
-              title="Click to change symbol"
-            >
-              {baseName}
-              <span className="text-[10px] text-gray-600 ml-1">{exchange}</span>
-            </button>
-            <span className="text-gray-700">|</span>
-            {/* Timeframe buttons */}
-            {TIMEFRAMES.map((tf) => (
-              <button key={tf} onClick={() => setTimeframe(tf)}
-                className={`px-1.5 py-0.5 text-[10px] rounded ${timeframe === tf ? 'bg-[#2a2a4a] text-white' : 'text-gray-600 hover:text-gray-300'}`}
-              >{tf}</button>
-            ))}
-          </>
-        )}
+        {TIMEFRAMES.map((tf) => (
+          <button key={tf} onClick={() => setTimeframe(tf)}
+            className={`px-1.5 py-0.5 text-[10px] rounded ${timeframe === tf ? 'bg-[#2a2a4a] text-white' : 'text-gray-600 hover:text-gray-300'}`}
+          >{tf}</button>
+        ))}
         {loading && <span className="text-[10px] text-gray-600 ml-auto">Loading...</span>}
       </div>
 

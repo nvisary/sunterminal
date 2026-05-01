@@ -24,6 +24,8 @@ import { usePanelsStore } from '../stores/panels.store';
 import { useLayoutStore, WIDGET_REGISTRY } from '../stores/layout.store';
 import { useSyncStore, SYNC_GROUPS } from '../stores/sync.store';
 import { RightSidebar } from '../components/RightSidebar';
+import { SymbolPicker } from '../components/common/SymbolPicker';
+import { useWidgetSymbolControl } from '../lib/useWidgetSymbol';
 import type { WidgetConfig, Layout } from '../stores/layout.store';
 
 function SyncDot({ widgetId }: { widgetId: string }) {
@@ -95,16 +97,30 @@ function WidgetWrapper({ widget, onRemove, children }: {
   onRemove: () => void;
   children: React.ReactNode;
 }) {
-  const groupId = useSyncStore((s) => s.assignments[widget.id] ?? null);
-  const borderColor = SYNC_GROUPS.find((g) => g.id === groupId)?.color;
+  const ctl = useWidgetSymbolControl(widget);
+  const borderColor = ctl.groupColor;
 
   return (
     <div className="h-full flex flex-col bg-[#0c0c14] rounded border"
       style={{ borderColor: borderColor ?? '#1a1a2a' }}
     >
       <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
-        <SyncDot widgetId={widget.id} />
-        <span className="text-[10px] text-gray-500 flex-1 truncate">{widget.title}</span>
+        {ctl.isSymbolWidget ? (
+          <>
+            <SyncDot widgetId={widget.id} />
+            <div onMouseDown={(e) => e.stopPropagation()} className="flex-1 min-w-0 cursor-default">
+              <SymbolPicker
+                exchange={ctl.exchange}
+                symbol={ctl.symbol}
+                onChange={ctl.setSymbol}
+                groupColor={ctl.groupColor}
+                compact
+              />
+            </div>
+          </>
+        ) : (
+          <span className="text-[10px] text-gray-500 flex-1 truncate">{widget.title}</span>
+        )}
         <HelpPopover widgetType={widget.type} />
         <button onClick={onRemove} className="text-[10px] text-gray-700 hover:text-red-400 px-1" title="Close widget">x</button>
       </div>
@@ -113,71 +129,33 @@ function WidgetWrapper({ widget, onRemove, children }: {
   );
 }
 
-// Widgets that respond to symbol sync
-const SYMBOL_WIDGETS = new Set(['orderbook', 'chart', 'candleChart', 'trades', 'tradeForm', 'heatmap']);
-
 function WidgetContent({ widget }: { widget: WidgetConfig }) {
-  const panels = usePanelsStore((s) => s.panels);
   const activePanel = usePanelsStore((s) => s.activePanel);
-  const updatePanel = usePanelsStore((s) => s.updatePanel);
-  const getWidgetSymbol = useSyncStore((s) => s.getWidgetSymbol);
-  const setGroupSymbol = useSyncStore((s) => s.setGroupSymbol);
-  const groupId = useSyncStore((s) => s.assignments[widget.id] ?? null);
-
-  const active = panels[activePanel] ?? panels[0];
-  const panelIdx = (widget.props?.panelIndex as number) ?? activePanel;
-  const panel = panels[panelIdx] ?? active;
-  if (!panel) return <div className="text-gray-600 text-xs p-2">No data</div>;
-
-  // If widget is in a sync group, use group's symbol; otherwise use panel's
-  const resolved = SYMBOL_WIDGETS.has(widget.type)
-    ? getWidgetSymbol(widget.id, panel.exchange, panel.symbol)
-    : { exchange: panel.exchange, symbol: panel.symbol };
-
-  const onChangeSymbol = (sym: string) => {
-    if (groupId) {
-      setGroupSymbol(groupId, resolved.exchange, sym);
-    } else {
-      updatePanel(panelIdx, { symbol: sym });
-    }
-  };
-
-  const onChangeExchange = (ex: string) => {
-    if (groupId) {
-      setGroupSymbol(groupId, ex, resolved.symbol);
-    } else {
-      updatePanel(panelIdx, { exchange: ex });
-    }
-  };
+  const ctl = useWidgetSymbolControl(widget);
+  const panelIdx = (widget.props?.panelIndex as number | undefined) ?? activePanel;
+  const isActive = panelIdx === activePanel;
 
   switch (widget.type) {
     case 'orderbook':
-      return (
-        <OrderBookWidget
-          exchange={resolved.exchange} symbol={resolved.symbol}
-          isActive={panelIdx === activePanel}
-          onChangeSymbol={onChangeSymbol}
-          onChangeExchange={onChangeExchange}
-        />
-      );
+      return <OrderBookWidget widget={widget} exchange={ctl.exchange} symbol={ctl.symbol} isActive={isActive} />;
     case 'chart':
-      return <PriceChartWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <PriceChartWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'candleChart':
-      return <CandleChartWidget defaultExchange={resolved.exchange} defaultSymbol={resolved.symbol} />;
+      return <CandleChartWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'trades':
-      return <TradesWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <TradesWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'volumeProfile':
-      return <VolumeProfileWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <VolumeProfileWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'heatmap':
-      return <LiquidityHeatmapWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <LiquidityHeatmapWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'funding':
-      return <FundingWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <FundingWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'volatility':
-      return <VolatilityWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <VolatilityWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'levels':
-      return <LevelsWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <LevelsWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'tradeForm':
-      return <TradeFormWidget exchange={resolved.exchange} symbol={resolved.symbol} />;
+      return <TradeFormWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case 'drawdown':
       return <DrawdownWidget />;
     case 'exposure':

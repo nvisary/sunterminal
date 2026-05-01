@@ -15,6 +15,8 @@ const CMD_STREAMS = [
   CmdStreamKeys.simOpen,
   CmdStreamKeys.simClose,
   CmdStreamKeys.simCloseAll,
+  CmdStreamKeys.simLimit,
+  CmdStreamKeys.simCancel,
   CmdStreamKeys.simReset,
   CmdStreamKeys.simConfig,
 ] as const;

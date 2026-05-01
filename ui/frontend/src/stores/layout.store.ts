@@ -96,6 +96,7 @@ interface LayoutStore {
   setLayout: (layout: Layout) => void;
   addWidget: (type: string) => void;
   removeWidget: (id: string) => void;
+  updateWidgetProps: (id: string, props: Record<string, unknown>) => void;
   addPane: (name: string) => void;
   removePane: (id: string) => void;
   renamePane: (id: string, name: string) => void;
@@ -157,6 +158,16 @@ export const useLayoutStore = create<LayoutStore>()(
                 }
               : p
           ),
+        })),
+
+      updateWidgetProps: (id, props) =>
+        set((s) => ({
+          panes: s.panes.map((p) => ({
+            ...p,
+            widgets: p.widgets.map((w) =>
+              w.id === id ? { ...w, props: { ...(w.props ?? {}), ...props } } : w,
+            ),
+          })),
         })),
 
       addPane: (name) => {

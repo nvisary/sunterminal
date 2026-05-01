@@ -45,6 +45,49 @@ export function createSimRoutes(redis: Redis) {
       return true;
     }
 
+    // POST /api/sim/trade/limit  body: { exchange, symbol, side, price, amount, reduceOnly?, orderId? }
+    if (path === "/api/sim/trade/limit" && method === "POST") {
+      const { exchange, symbol, side, price, amount } = body as {
+        exchange?: string; symbol?: string; side?: "buy" | "sell";
+        price?: number; amount?: number;
+      };
+      if (!exchange || !symbol || !side || !price || !amount) {
+        json(res, 400, { ok: false, error: "exchange, symbol, side, price, amount required" });
+        return true;
+      }
+      await redis.xadd(
+        "cmd:sim:trade:limit",
+        "MAXLEN", "~", "1000", "*",
+        "data", JSON.stringify(body),
+      );
+      json(res, 200, { ok: true });
+      return true;
+    }
+
+    // DELETE /api/sim/trade/order/:id
+    const cancelMatch = path.match(/^\/api\/sim\/trade\/order\/(.+)$/);
+    if (cancelMatch && method === "DELETE") {
+      const orderId = cancelMatch[1]!;
+      await redis.xadd(
+        "cmd:sim:trade:cancel",
+        "MAXLEN", "~", "100", "*",
+        "data", JSON.stringify({ orderId }),
+      );
+      json(res, 200, { ok: true });
+      return true;
+    }
+
+    // GET /api/sim/open-orders
+    if (path === "/api/sim/open-orders" && method === "GET") {
+      const accountId = DEFAULT_ACCOUNT_ID;
+      const all = await redis.hgetall(`sim:open-orders:${accountId}`);
+      const orders = Object.values(all)
+        .map((s) => { try { return JSON.parse(s); } catch { return null; } })
+        .filter(Boolean);
+      json(res, 200, orders);
+      return true;
+    }
+
     // POST /api/sim/trade/close-all
     if (path === "/api/sim/trade/close-all" && method === "POST") {
       await redis.xadd(
@@ -91,9 +134,11 @@ export function createSimRoutes(redis: Redis) {
     if (path === "/api/sim/positions" && method === "GET") {
       const accountId = DEFAULT_ACCOUNT_ID;
       const all = await redis.hgetall(`sim:positions:${accountId}`);
-      const positions = Object.values(all).map((s) => {
-        try { return JSON.parse(s); } catch { return null; }
-      }).filter(Boolean);
+      const positions = Object.values(all)
+        .map((s) => {
+          try { return JSON.parse(s) as { closedAt?: number | null }; } catch { return null; }
+        })
+        .filter((p): p is Record<string, unknown> => p !== null && !p.closedAt);
       json(res, 200, positions);
       return true;
     }

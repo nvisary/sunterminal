@@ -58,13 +58,24 @@ export class TradeJournal {
   async restore(closedLimit: number = 500): Promise<void> {
     try {
       const openRaw = await this.bus.client.hgetall(this.keys.openHash);
+      const stale: string[] = [];
       for (const [id, payload] of Object.entries(openRaw)) {
         try {
           const rec = JSON.parse(payload) as TradeRecord;
+          // Defensive: a previous MTM/close race could leave a record with
+          // closedAt set inside the open hash. Treat those as stale and purge.
+          if (rec.closedAt) {
+            stale.push(id);
+            continue;
+          }
           this.openTrades.set(id, rec);
         } catch {
-          // skip corrupt entry
+          stale.push(id);
         }
+      }
+      if (stale.length > 0) {
+        await this.bus.client.hdel(this.keys.openHash, ...stale);
+        logger.warn({ accountId: this.ctx.accountId, count: stale.length }, "Purged stale closed entries from open hash");
       }
 
       const closed = await this.bus.client.xrevrange(this.keys.journalStream, "+", "-", "COUNT", closedLimit);
@@ -219,6 +230,27 @@ export class TradeJournal {
     if (!rec) return;
     rec.fundingPaid += deltaUSD;
     await this.bus.client.hset(this.keys.openHash, tradeId, JSON.stringify(rec));
+  }
+
+  /**
+   * Mutate an open position in-place. Used by sim netting to grow an existing
+   * position (same-direction fill) or shrink it (opposite-direction fill).
+   * Persists to Redis hash so the UI sees the change on next mark.
+   */
+  async updateOpen(tradeId: string, updates: Partial<TradeRecord>): Promise<TradeRecord | null> {
+    const rec = this.openTrades.get(tradeId);
+    if (!rec) return null;
+    Object.assign(rec, updates);
+    await this.bus.client.hset(this.keys.openHash, tradeId, JSON.stringify(rec));
+    return rec;
+  }
+
+  /** Find one open trade by exchange+symbol (sim assumes one position per symbol). */
+  findOpenBySymbol(exchange: string, symbol: string): TradeRecord | undefined {
+    for (const t of this.openTrades.values()) {
+      if (t.exchange === exchange && t.symbol === symbol) return t;
+    }
+    return undefined;
   }
 
   getOpenTrades(): TradeRecord[] {
