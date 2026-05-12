@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { API_BASE, wsClient } from '../lib/ws-client';
-import { useSimStore, type SimPosition, type SimExposure } from '../stores/sim.store';
+import { API_BASE } from '../lib/ws-client';
+import { useSimStore, type SimPosition } from '../stores/sim.store';
 
 const API = `${API_BASE}/api`;
 
@@ -29,13 +29,12 @@ export function SimPositionsWidget() {
   const [closing, setClosing] = useState<string | null>(null);
 
   useEffect(() => {
+    // Positions are pushed via sim:events (lib/sim-events). The 30s poll is
+    // a safety net only — drops to zero churn at steady state instead of the
+    // old per-second wipe-and-replace that made the DOM mark/SL/TP flicker.
     refreshPositions();
-    // Re-fetch positions when exposure ticks (cheap, no extra stream needed for v1)
-    const unsub = wsClient.subscribe<SimExposure>('sim:exposure', () => {
-      refreshPositions();
-    });
-    const id = setInterval(refreshPositions, 3000);
-    return () => { unsub(); clearInterval(id); };
+    const id = setInterval(refreshPositions, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   const closePosition = async (id: string) => {

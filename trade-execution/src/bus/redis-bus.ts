@@ -114,6 +114,44 @@ export class RedisBus {
     return messages;
   }
 
+  /**
+   * Read from multiple streams in one XREADGROUP call. The Redis server wakes
+   * the BLOCK as soon as ANY of the streams gets new data, so latency is
+   * bounded by Redis dispatch (microseconds) rather than by other in-flight
+   * BLOCKs on the same connection.
+   */
+  async readGroupMulti(
+    groupName: string,
+    consumerName: string,
+    streamKeys: readonly string[],
+    count: number = 10,
+    blockMs: number = 5000,
+  ): Promise<Array<{ stream: string; id: string; data: Record<string, unknown> }>> {
+    if (streamKeys.length === 0) return [];
+    const args: (string | number)[] = [
+      "GROUP", groupName, consumerName,
+      "COUNT", count,
+      "BLOCK", blockMs,
+      "STREAMS",
+      ...streamKeys,
+      ...streamKeys.map(() => ">"),
+    ];
+    const result = await (this.sub.xreadgroup as (...a: unknown[]) => Promise<unknown>)(...args);
+    if (!result) return [];
+
+    const messages: Array<{ stream: string; id: string; data: Record<string, unknown> }> = [];
+    for (const stream of result as Array<[string, Array<[string, string[]]>]>) {
+      const [streamKey, entries] = stream;
+      for (const [id, fields] of entries) {
+        const dataIdx = fields.indexOf("data");
+        if (dataIdx !== -1 && fields[dataIdx + 1]) {
+          messages.push({ stream: streamKey, id, data: JSON.parse(fields[dataIdx + 1]!) });
+        }
+      }
+    }
+    return messages;
+  }
+
   // ─── ACK ───────────────────────────────────────────────────────
 
   async ack(streamKey: string, groupName: string, ...ids: string[]): Promise<void> {

@@ -115,27 +115,44 @@ export class SimMatchingEngine {
   }
 
   /**
-   * Try to match a resting limit order against a recent trade tick.
-   * Returns null if the trade doesn't cross the limit.
+   * Classify how a single trade tick interacts with a resting limit order.
+   * - "cross": price moved strictly past the limit → fill now regardless of queue.
+   * - "touch": trade printed at the limit AND was on the opposite (aggressor)
+   *           side → counts toward consuming the queue ahead of us.
+   * - "none": trade doesn't interact (wrong side, or didn't reach the price).
    */
-  matchLimitAgainstTrade(params: {
+  classifyTradeForLimit(params: {
     side: "buy" | "sell";
     limitPrice: number;
-    amount: number;
     tradePrice: number;
-  }): SimFillResult | null {
-    const { side, limitPrice, amount, tradePrice } = params;
-    // Buy fills when market trades AT or BELOW the limit
-    // Sell fills when market trades AT or ABOVE the limit
-    const crosses = side === "buy" ? tradePrice <= limitPrice : tradePrice >= limitPrice;
-    if (!crosses) return null;
+    tradeSide?: "buy" | "sell";
+  }): "cross" | "touch" | "none" {
+    const { side, limitPrice, tradePrice, tradeSide } = params;
+    // Price-relative epsilon so FP wobble on a $80,770 tick doesn't mis-classify
+    // a touch as a cross or vice versa.
+    const eps = Math.max(limitPrice * 1e-8, 1e-9);
+    const dp = tradePrice - limitPrice;
+    if (side === "buy") {
+      if (dp < -eps) return "cross";
+      if (Math.abs(dp) <= eps && tradeSide === "sell") return "touch";
+      return "none";
+    }
+    if (dp > eps) return "cross";
+    if (Math.abs(dp) <= eps && tradeSide === "buy") return "touch";
+    return "none";
+  }
 
-    const fillPrice = limitPrice; // conservative: fill at limit exactly (assume queue position lost)
-    const fees = (fillPrice * amount * this.cfg.makerFeePct) / 100;
+  /**
+   * Build the maker-side fill for a resting limit order. Caller is responsible
+   * for deciding (via classifyTradeForLimit + queue accounting) that the order
+   * should fill — this helper just computes price/fees.
+   */
+  computeLimitFill(limitPrice: number, amount: number): SimFillResult {
+    const fees = (limitPrice * amount * this.cfg.makerFeePct) / 100;
     return {
       filled: true,
       filledAmount: amount,
-      averagePrice: fillPrice,
+      averagePrice: limitPrice,
       slippagePct: 0,
       fees,
     };
