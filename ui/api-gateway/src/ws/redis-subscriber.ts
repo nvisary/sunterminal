@@ -17,7 +17,10 @@ export class RedisSubscriber {
   private lastIds = new Map<string, string>();
 
   constructor(redisUrl: string) {
-    this.redis = new Redis(redisUrl, { maxRetriesPerRequest: null, lazyConnect: true });
+    this.redis = new Redis(redisUrl, {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+    });
   }
 
   async connect(): Promise<void> {
@@ -64,7 +67,10 @@ export class RedisSubscriber {
 
     if (isSnapshot) {
       // Snapshot: GET key every second
-      const timer = setInterval(() => this.pollSnapshot(channel, redisKey), 1000);
+      const timer = setInterval(
+        () => this.pollSnapshot(channel, redisKey),
+        1000,
+      );
       this.pollers.set(channel, timer);
     } else {
       // Stream: non-blocking XREAD every 100ms
@@ -103,17 +109,35 @@ export class RedisSubscriber {
 
       // "$" doesn't work with non-blocking XREAD — resolve to actual last ID once
       if (!lastId || lastId === "$") {
-        const latest = await this.redis.xrevrange(redisKey, "+", "-", "COUNT", 1);
-        lastId = latest.length > 0 ? (latest[0] as [string, string[]])[0] : "0-0";
+        const latest = await this.redis.xrevrange(
+          redisKey,
+          "+",
+          "-",
+          "COUNT",
+          1,
+        );
+        lastId =
+          latest.length > 0 ? (latest[0] as [string, string[]])[0] : "0-0";
         this.lastIds.set(channel, lastId!);
-        logger.debug({ channel, redisKey, resolvedId: lastId }, "Resolved stream position");
+        logger.debug(
+          { channel, redisKey, resolvedId: lastId },
+          "Resolved stream position",
+        );
         return; // Skip this cycle, next poll uses real ID
       }
 
-      const result = await this.redis.xread("COUNT", 100, "STREAMS", redisKey, lastId);
+      const result = await this.redis.xread(
+        "COUNT",
+        100,
+        "STREAMS",
+        redisKey,
+        lastId,
+      );
       if (!result) return;
 
-      for (const [, entries] of result as Array<[string, Array<[string, string[]]>]>) {
+      for (const [, entries] of result as Array<
+        [string, Array<[string, string[]]>]
+      >) {
         for (const [id, fields] of entries) {
           this.lastIds.set(channel, id);
           const dataIdx = fields.indexOf("data");
@@ -190,6 +214,8 @@ export class RedisSubscriber {
     // Per-symbol risk snapshots (polled by subscriber every 1s)
     if (channel.startsWith("volatility:")) return `risk:snapshot:${channel}`;
     if (channel.startsWith("levels:")) return `risk:snapshot:${channel}`;
+    if (channel.startsWith("microstructure:"))
+      return `risk:snapshot:${channel}`;
 
     logger.warn({ channel }, "Unknown channel mapping");
     return null;

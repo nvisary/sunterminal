@@ -30,7 +30,10 @@ export class WsProxy {
 
     ws.on("message", (raw) => {
       try {
-        const msg = JSON.parse(String(raw)) as { action: string; channel: string };
+        const msg = JSON.parse(String(raw)) as {
+          action: string;
+          channel: string;
+        };
         if (msg.action === "subscribe") {
           this.subscribeClient(ws, msg.channel);
         } else if (msg.action === "unsubscribe") {
@@ -95,8 +98,12 @@ export class WsProxy {
     logger.debug("WebSocket client disconnected");
   }
 
-  private static parseSymbolChannel(channel: string): { exchange: string; symbol: string } | null {
-    const match = channel.match(/^(?:orderbook|trades|ticker):([^:]+):(.+)$/);
+  private static parseSymbolChannel(
+    channel: string,
+  ): { exchange: string; symbol: string } | null {
+    const match = channel.match(
+      /^(?:orderbook|trades|ticker|microstructure|volatility|levels):([^:]+):(.+)$/,
+    );
     if (!match) return null;
     return { exchange: match[1]!, symbol: match[2]! };
   }
@@ -121,15 +128,20 @@ export class WsProxy {
     }
 
     // Evict oldest if over limit
-    while (this.mdSubscribed.size >= MAX_MD_SUBSCRIPTIONS && this.mdSubscribedOrder.length > 0) {
+    while (
+      this.mdSubscribed.size >= MAX_MD_SUBSCRIPTIONS &&
+      this.mdSubscribedOrder.length > 0
+    ) {
       const oldest = this.mdSubscribedOrder.shift()!;
       await this.sendMdCommand("unsubscribe", oldest);
+      await this.sendRiskCommand("unsubscribe", oldest);
       this.mdSubscribed.delete(oldest);
     }
 
     this.mdSubscribed.add(key);
     this.mdSubscribedOrder.push(key);
     await this.sendMdCommand("subscribe", key);
+    await this.sendRiskCommand("subscribe", key);
   }
 
   /**
@@ -146,34 +158,71 @@ export class WsProxy {
     if (!this.mdSubscribed.has(key)) return;
 
     // Check if any client still listens to any stream for this symbol
-    const prefixes = [`orderbook:${exchange}:${symbol}`, `trades:${exchange}:${symbol}`, `ticker:${exchange}:${symbol}`];
+    const prefixes = [
+      `orderbook:${exchange}:${symbol}`,
+      `trades:${exchange}:${symbol}`,
+      `ticker:${exchange}:${symbol}`,
+      `microstructure:${exchange}:${symbol}`,
+      `volatility:${exchange}:${symbol}`,
+      `levels:${exchange}:${symbol}`,
+    ];
     for (const prefix of prefixes) {
       if (this.subscriber.getSubscriberCount(prefix) > 0) return;
     }
 
-    // No listeners left — unsubscribe from market-data
+    // No listeners left — unsubscribe from market-data and risk-engine
     this.mdSubscribed.delete(key);
     this.mdSubscribedOrder = this.mdSubscribedOrder.filter((k) => k !== key);
     this.sendMdCommand("unsubscribe", key);
+    this.sendRiskCommand("unsubscribe", key);
   }
 
-  private async sendMdCommand(method: "subscribe" | "unsubscribe", key: string): Promise<void> {
+  private async sendMdCommand(
+    method: "subscribe" | "unsubscribe",
+    key: string,
+  ): Promise<void> {
     const [exchange, ...rest] = key.split(":");
     const symbol = rest.join(":");
     try {
       await this.redis.xadd(
         "cmd:rest-request",
-        "MAXLEN", "~", "1000",
+        "MAXLEN",
+        "~",
+        "1000",
         "*",
-        "data", JSON.stringify({ method, exchange, args: [symbol], replyTo: "" })
+        "data",
+        JSON.stringify({ method, exchange, args: [symbol], replyTo: "" }),
       );
       logger.info({ exchange, symbol }, `Requested market-data ${method}`);
     } catch (err) {
       logger.error({ exchange, symbol, err }, `Failed to request md ${method}`);
-      if (method === "subscribe") {
-        this.mdSubscribed.delete(key);
-        this.mdSubscribedOrder = this.mdSubscribedOrder.filter((k) => k !== key);
-      }
+    }
+  }
+
+  private async sendRiskCommand(
+    method: "subscribe" | "unsubscribe",
+    key: string,
+  ): Promise<void> {
+    const [exchange, ...rest] = key.split(":");
+    const symbol = rest.join(":");
+    try {
+      const streamKey =
+        method === "subscribe" ? "cmd:risk:subscribe" : "cmd:risk:unsubscribe";
+      await this.redis.xadd(
+        streamKey,
+        "MAXLEN",
+        "~",
+        "100",
+        "*",
+        "data",
+        JSON.stringify({ exchange, symbol }),
+      );
+      logger.info({ exchange, symbol }, `Requested risk-engine ${method}`);
+    } catch (err) {
+      logger.error(
+        { exchange, symbol, err },
+        `Failed to request risk ${method}`,
+      );
     }
   }
 

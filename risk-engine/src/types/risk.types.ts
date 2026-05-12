@@ -1,8 +1,19 @@
 // ─── Universal Risk Signal ────────────────────────────────────────
 
-export type SignalSource = "drawdown" | "levels" | "volatility" | "correlation" | "exposure" | "funding";
+export type SignalSource =
+  | "drawdown"
+  | "levels"
+  | "volatility"
+  | "correlation"
+  | "exposure"
+  | "funding";
 export type SignalLevel = "info" | "warning" | "danger" | "critical";
-export type SignalAction = "alert" | "block_new" | "reduce" | "close_position" | "close_all";
+export type SignalAction =
+  | "alert"
+  | "block_new"
+  | "reduce"
+  | "close_position"
+  | "close_all";
 
 export interface RiskSignal {
   id: string;
@@ -18,11 +29,22 @@ export interface RiskSignal {
 
 // ─── Drawdown ─────────────────────────────────────────────────────
 
-export type DrawdownLevel = "NORMAL" | "WARNING" | "DANGER" | "CRITICAL" | "MAX_PEAK" | "PER_TRADE";
+export type DrawdownLevel =
+  | "NORMAL"
+  | "WARNING"
+  | "DANGER"
+  | "CRITICAL"
+  | "MAX_PEAK"
+  | "PER_TRADE";
 
 export interface DrawdownSignal extends RiskSignal {
   source: "drawdown";
-  type: "DD_WARNING" | "DD_DANGER" | "DD_CRITICAL" | "DD_MAX_PEAK" | "DD_PER_TRADE";
+  type:
+    | "DD_WARNING"
+    | "DD_DANGER"
+    | "DD_CRITICAL"
+    | "DD_MAX_PEAK"
+    | "DD_PER_TRADE";
   payload: {
     currentEquity: number;
     peakEquity: number;
@@ -77,7 +99,11 @@ export interface LiquidityZone {
 
 // ─── Volatility ───────────────────────────────────────────────────
 
-export type VolatilityRegime = "LOW_VOL" | "NORMAL" | "HIGH_VOL" | "EXTREME_VOL";
+export type VolatilityRegime =
+  | "LOW_VOL"
+  | "NORMAL"
+  | "HIGH_VOL"
+  | "EXTREME_VOL";
 
 export interface VolatilityData {
   exchange: string;
@@ -103,7 +129,11 @@ export interface CorrelationMatrix {
 
 // ─── Exposure ─────────────────────────────────────────────────────
 
-export type ExposureSignalType = "EXP_HIGH" | "EXP_IMBALANCE" | "EXP_CONCENTRATED" | "EXP_EXCHANGE_RISK";
+export type ExposureSignalType =
+  | "EXP_HIGH"
+  | "EXP_IMBALANCE"
+  | "EXP_CONCENTRATED"
+  | "EXP_EXCHANGE_RISK";
 
 export interface PositionSummary {
   exchange: string;
@@ -123,6 +153,31 @@ export interface ExposureSnapshot {
   byAsset: Record<string, { long: number; short: number; net: number }>;
   positions: PositionSummary[];
   timestamp: number;
+}
+
+// ─── Microstructure ───────────────────────────────────────────────
+
+export interface MicrostructureData {
+  exchange: string;
+  symbol: string;
+  ofi: number; // Order Flow Imbalance
+  bookImbalance: number; // -1 to 1
+  cvd: number; // Cumulative Volume Delta
+  vpin: number; // Order flow toxicity (0 to 1)
+  liquidityVoids: LiquidityVoid[];
+  buyVolume: number;
+  sellVolume: number;
+  buyCount: number;
+  sellCount: number;
+  avgTradeSize: number;
+  timestamp: number;
+}
+
+export interface LiquidityVoid {
+  priceFrom: number;
+  priceTo: number;
+  gapSizePct: number;
+  side: "bid" | "ask" | "mid";
 }
 
 // ─── Alerts ───────────────────────────────────────────────────────
@@ -170,6 +225,12 @@ export interface RiskEngineConfig {
     spoofFlickerCount: number;
     ohlcvTimeframes: string[];
     swingLookback: number;
+  };
+  microstructure: {
+    tradeWindowMs: number;
+    imbalanceDepth: number;
+    vpinBucketVolume: number; // Volume per bucket
+    vpinBucketCount: number; // Window size in buckets
   };
   alerts: {
     telegramBotToken?: string;

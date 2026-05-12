@@ -1,22 +1,23 @@
-import { usePanelsStore } from '../stores/panels.store';
-import { useSyncStore, SYNC_GROUPS } from '../stores/sync.store';
-import type { WidgetConfig } from '../stores/layout.store';
+import { usePanelsStore } from "../stores/panels.store";
+import { useSyncStore, SYNC_GROUPS } from "../stores/sync.store";
+import type { WidgetConfig } from "../stores/layout.store";
 
 /**
  * Widget types that follow symbol changes (panel symbol or sync group symbol).
  * Account-wide widgets (drawdown, exposure, alerts, hedge) are NOT here.
  */
 const SYMBOL_WIDGETS = new Set([
-  'orderbook',
-  'chart',
-  'candleChart',
-  'trades',
-  'tradeForm',
-  'heatmap',
-  'volumeProfile',
-  'funding',
-  'volatility',
-  'levels',
+  "orderbook",
+  "chart",
+  "candleChart",
+  "trades",
+  "tradeForm",
+  "heatmap",
+  "volumeProfile",
+  "funding",
+  "volatility",
+  "levels",
+  "microstructure",
 ]);
 
 export function isSymbolWidget(type: string): boolean {
@@ -41,7 +42,9 @@ export interface WidgetSymbolControl {
  *
  * Returns a stable shape; safe to use in any widget container.
  */
-export function useWidgetSymbolControl(widget: WidgetConfig): WidgetSymbolControl {
+export function useWidgetSymbolControl(
+  widget: WidgetConfig,
+): WidgetSymbolControl {
   const panels = usePanelsStore((s) => s.panels);
   const activePanel = usePanelsStore((s) => s.activePanel);
   const updatePanel = usePanelsStore((s) => s.updatePanel);
@@ -58,7 +61,8 @@ export function useWidgetSymbolControl(widget: WidgetConfig): WidgetSymbolContro
     groupId ? (s.groupState[groupId]?.symbol ?? null) : null,
   );
 
-  const panelIdx = (widget.props?.panelIndex as number | undefined) ?? activePanel;
+  const panelIdx =
+    (widget.props?.panelIndex as number | undefined) ?? activePanel;
   const panel = panels[panelIdx] ?? panels[activePanel] ?? panels[0]!;
 
   const widgetIsSymbolBound = SYMBOL_WIDGETS.has(widget.type);
