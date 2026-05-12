@@ -6,3 +6,6 @@ dist/
 !.env.example
 
 *.log
+
+# Claude Code local state
+.claude/
