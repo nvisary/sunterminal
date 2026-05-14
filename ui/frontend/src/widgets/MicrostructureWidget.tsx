@@ -49,6 +49,8 @@ export function MicrostructureWidget({
     );
   }
 
+  const isWarming = data.ready === false;
+
   // Scaling helpers
   const maxCvd = Math.max(...cvdHistory.map(Math.abs), 1);
   const maxOfi = Math.max(...ofiHistory.map(Math.abs), 1);
@@ -69,6 +71,14 @@ export function MicrostructureWidget({
 
   return (
     <div className="p-3 flex flex-col gap-4 overflow-auto h-full bg-[#0a0a0f] text-zinc-300 select-none font-mono scrollbar-thin">
+      {isWarming && (
+        <div className="text-[10px] uppercase tracking-wider text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 flex items-center justify-between">
+          <span>Warming up</span>
+          <span className="text-amber-300/70">
+            {data.buyCount + data.sellCount} trades
+          </span>
+        </div>
+      )}
       {/* 1. Imbalance: Bid vs Ask Pressure */}
       <section>
         <div className="flex justify-between text-[10px] uppercase text-zinc-500 mb-1.5 font-bold tracking-wider">

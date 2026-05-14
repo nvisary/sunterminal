@@ -19,6 +19,7 @@ import { AlertsWidget } from "../widgets/AlertsWidget";
 import { HedgeWidget } from "../widgets/HedgeWidget";
 import { MicrostructureWidget } from "../widgets/MicrostructureWidget";
 import { CandleChartWidget } from "../widgets/CandleChartWidget";
+import { FootprintWidget } from "../widgets/FootprintWidget";
 import { SimPositionsWidget } from "../widgets/SimPositionsWidget";
 import { SimJournalWidget } from "../widgets/SimJournalWidget";
 import { ModeBadge } from "../components/ModeBadge";
@@ -195,6 +196,8 @@ function WidgetContent({ widget }: { widget: WidgetConfig }) {
       return <PriceChartWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case "candleChart":
       return <CandleChartWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
+    case "footprint":
+      return <FootprintWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case "trades":
       return <TradesWidget exchange={ctl.exchange} symbol={ctl.symbol} />;
     case "volumeProfile":

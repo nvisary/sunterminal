@@ -12,6 +12,7 @@ import {
   useTradeAggregates, aggregateVP, computePocVA, computeTapeSpeed,
 } from './dom/analytics';
 import { HeatmapStrip, type DomSnapshot, type DomLadderRow } from './dom/HeatmapStrip';
+import { LiquidityHeatmapWidget } from './LiquidityHeatmapWidget';
 
 // Liquidity heatmap strip parameters. Window length is user-tunable via the
 // settings menu — short for scalping context, long to spot stacked levels.
@@ -75,6 +76,7 @@ function fmtVol(v: number): string {
 }
 
 type DomMode = 'static' | 'dynamic';
+type ViewMode = 'ladder' | 'heatmap';
 
 interface Row {
   price: number;
@@ -136,13 +138,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const marketInfo = useMarketInfo(exchange, symbol);
 
   const persisted = (widget?.props ?? {}) as {
-    tickIdx?: number; mode?: DomMode;
+    tickIdx?: number; mode?: DomMode; viewMode?: ViewMode;
     showVP?: boolean; showHeatmap?: boolean; flashEnabled?: boolean; qty?: string;
     heatmapWindowSec?: number;
   };
 
   const [tickIdx, setTickIdx] = useState<number>(persisted.tickIdx ?? TICK_DEFAULT_IDX);
   const [mode, setMode] = useState<DomMode>(persisted.mode ?? 'dynamic');
+  const [viewMode, setViewMode] = useState<ViewMode>(persisted.viewMode ?? 'ladder');
   const [scrollOffset, setScrollOffset] = useState(0);
   // Hysteresis-anchored center in dynamic mode. The ladder stays put across
   // small mid-price wobbles and only recenters when mid drifts outside the
@@ -161,8 +164,8 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   // Persist UI state to widget.props so it survives reloads / pane swaps.
   useEffect(() => {
     if (!widget?.id) return;
-    updateWidgetProps(widget.id, { tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec });
-  }, [widget?.id, tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec, updateWidgetProps]);
+    updateWidgetProps(widget.id, { tickIdx, mode, viewMode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec });
+  }, [widget?.id, tickIdx, mode, viewMode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec, updateWidgetProps]);
 
   const ladderRef = useRef<HTMLDivElement>(null);
   const [containerH, setContainerH] = useState(400);
@@ -378,6 +381,38 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
     : tape.hot === 'warm' ? 'text-yellow-500/80'
     : 'text-gray-500';
 
+  const viewTabs = (
+    <div className="flex gap-0.5 shrink-0">
+      {(['ladder', 'heatmap'] as ViewMode[]).map((v) => (
+        <button
+          key={v}
+          onClick={() => setViewMode(v)}
+          className={`px-1.5 py-0.5 text-[10px] rounded ${
+            viewMode === v
+              ? 'bg-[#2a2a4a] text-white'
+              : 'text-gray-500 hover:text-gray-300'
+          }`}
+          title={v === 'ladder' ? 'Order book ladder' : 'Liquidity heatmap'}
+        >
+          {v === 'ladder' ? 'Ladder' : 'Heatmap'}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (viewMode === 'heatmap') {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-[#1a1a2a] shrink-0">
+          {viewTabs}
+        </div>
+        <div className="flex-1 min-h-0">
+          <LiquidityHeatmapWidget exchange={exchange} symbol={symbol} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`h-full flex flex-col ${isActive ? '' : ''}`}
@@ -386,6 +421,8 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
     >
       {/* Toolbar (qty / virt / tape / settings) */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-[#1a1a2a] shrink-0">
+        {viewTabs}
+        <span className="w-px h-3 bg-[#1a1a2a] mx-1" />
         {/* Qty input */}
             <div className="flex items-center gap-0.5">
               <span className="text-[9px] text-gray-600 uppercase">Qty</span>

@@ -21,6 +21,7 @@ export interface MicrostructureData {
   sellCount: number;
   avgTradeSize: number;
   timestamp: number;
+  ready?: boolean;
 }
 
 interface MicrostructureStore {

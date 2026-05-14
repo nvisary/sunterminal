@@ -63,7 +63,9 @@ export class TradeAnalyzer {
     };
   }
 
-  private cleanup(): void {
+  // Cleanup is public so callers (scanners) can drop stale trades on
+  // quiet symbols where update() never runs.
+  cleanup(): void {
     const now = Date.now();
     const threshold = now - this.windowMs;
 
@@ -80,6 +82,7 @@ export class TradeAnalyzer {
   }
 
   getMetrics(): TradeMetrics {
+    this.cleanup();
     const totalTrades = this.buyCount + this.sellCount;
     return {
       cvd: this.buyVolume - this.sellVolume,
@@ -90,5 +93,9 @@ export class TradeAnalyzer {
       avgTradeSize:
         totalTrades > 0 ? (this.buyVolume + this.sellVolume) / totalTrades : 0,
     };
+  }
+
+  tradeCount(): number {
+    return this.trades.length;
   }
 }

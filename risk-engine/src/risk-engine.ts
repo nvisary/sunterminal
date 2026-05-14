@@ -222,19 +222,35 @@ export class RiskEngine {
     this.cmdController = new AbortController();
     const signal = this.cmdController.signal;
 
-    (async () => {
-      const subKey = "cmd:risk:subscribe";
-      const group = "risk-engine-cmds";
-      const consumer = `risk-cmd-${process.pid}`;
+    this.runCommandLoop(signal, "cmd:risk:subscribe", async (ex, sym) => {
+      logger.info({ exchange: ex, symbol: sym }, "Dynamic risk subscription");
+      await this.consumer.subscribe(ex, sym);
+      this.microstructure.prepareSymbol(ex, sym);
+    });
 
-      await this.bus.ensureConsumerGroup(subKey, group);
+    this.runCommandLoop(signal, "cmd:risk:unsubscribe", async (ex, sym) => {
+      logger.info({ exchange: ex, symbol: sym }, "Dynamic risk unsubscription");
+      this.microstructure.releaseSymbol(ex, sym);
+    });
+  }
+
+  private runCommandLoop(
+    signal: AbortSignal,
+    streamKey: string,
+    handler: (exchange: string, symbol: string) => Promise<void>,
+  ): void {
+    const group = "risk-engine-cmds";
+    const consumer = `risk-cmd-${process.pid}`;
+
+    (async () => {
+      await this.bus.ensureConsumerGroup(streamKey, group);
 
       while (!signal.aborted) {
         try {
           const msgs = await this.bus.readGroup(
             group,
             consumer,
-            subKey,
+            streamKey,
             5,
             2000,
           );
@@ -244,13 +260,16 @@ export class RiskEngine {
               symbol: string;
             };
             if (exchange && symbol) {
-              logger.info(
-                { exchange, symbol },
-                "Dynamic risk subscription received",
-              );
-              await this.consumer.subscribe(exchange, symbol);
+              try {
+                await handler(exchange, symbol);
+              } catch (err) {
+                logger.error(
+                  { err, streamKey, exchange, symbol },
+                  "Risk command handler failed",
+                );
+              }
             }
-            await this.bus.ack(subKey, group, m.id);
+            await this.bus.ack(streamKey, group, m.id);
           }
         } catch (err) {
           if (signal.aborted) break;
@@ -258,7 +277,7 @@ export class RiskEngine {
         }
       }
     })().catch((err) =>
-      logger.error({ err }, "Risk engine command listener crashed"),
+      logger.error({ err, streamKey }, "Risk command listener crashed"),
     );
   }
 }

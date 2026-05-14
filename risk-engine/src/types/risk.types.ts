@@ -171,6 +171,9 @@ export interface MicrostructureData {
   sellCount: number;
   avgTradeSize: number;
   timestamp: number;
+  // Becomes true once the analyzer has enough trades or warmed for
+  // long enough. UIs treat false as "warming up".
+  ready: boolean;
 }
 
 export interface LiquidityVoid {

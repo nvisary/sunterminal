@@ -9,7 +9,7 @@ import {
   Briefcase,
   CandlestickChart,
   Crosshair,
-  Flame,
+  Grid3x3,
   LineChart,
   ListOrdered,
   Network,
@@ -51,8 +51,8 @@ export interface WidgetRegistryEntry {
 export const WIDGET_REGISTRY: Record<string, WidgetRegistryEntry> = {
   orderbook: {
     title: "Order Book",
-    defaultW: 4,
-    defaultH: 8,
+    defaultW: 6,
+    defaultH: 10,
     minW: 3,
     minH: 4,
     icon: ListOrdered,
@@ -73,14 +73,9 @@ export const WIDGET_REGISTRY: Record<string, WidgetRegistryEntry> = {
     minH: 4,
     icon: BarChart3,
   },
-  heatmap: {
-    title: "Liquidity Heatmap",
-    defaultW: 6,
-    defaultH: 7,
-    minW: 4,
-    minH: 4,
-    icon: Flame,
-  },
+  // Standalone heatmap removed in v2 — it's now a view mode of Order Book.
+  // Persisted widgets of this type are migrated by the persist `migrate`
+  // hook below into orderbook with props.viewMode: "heatmap".
   funding: {
     title: "Funding",
     defaultW: 3,
@@ -120,6 +115,14 @@ export const WIDGET_REGISTRY: Record<string, WidgetRegistryEntry> = {
     minW: 4,
     minH: 5,
     icon: CandlestickChart,
+  },
+  footprint: {
+    title: "Footprint Chart",
+    defaultW: 8,
+    defaultH: 8,
+    minW: 4,
+    minH: 4,
+    icon: Grid3x3,
   },
   tradeForm: {
     title: "Trade Form",
@@ -409,11 +412,36 @@ export const useLayoutStore = create<LayoutStore>()(
     }),
     {
       name: "sun-layout",
+      version: 2,
       partialize: (s) => ({
         panes: s.panes,
         activePaneId: s.activePaneId,
         sidebarOpen: s.sidebarOpen,
       }),
+      migrate: (persisted, version) => {
+        if (!persisted || typeof persisted !== "object") return persisted;
+        const state = persisted as { panes?: Pane[] };
+        if (!Array.isArray(state.panes)) return persisted;
+        if (version < 2) {
+          // v1 → v2: standalone "heatmap" widgets become orderbooks in
+          // heatmap view mode.
+          state.panes = state.panes.map((p) => ({
+            ...p,
+            widgets: p.widgets.map((w) =>
+              w.type === "heatmap"
+                ? {
+                    ...w,
+                    type: "orderbook",
+                    title: w.title.replace(/heatmap/i, "Order Book").trim() ||
+                      "Order Book",
+                    props: { ...(w.props ?? {}), viewMode: "heatmap" },
+                  }
+                : w,
+            ),
+          }));
+        }
+        return state;
+      },
     },
   ),
 );
