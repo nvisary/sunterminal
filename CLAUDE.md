@@ -111,22 +111,40 @@ React 19 + Vite + Tailwind.
 ## Redis Key Schema
 
 ### Streams
-| Key | Writer | Content |
-|-----|--------|---------|
-| `md:trades:{ex}:{sym}` | market-data | Trade updates |
-| `md:orderbook:{ex}:{sym}` | market-data | Orderbook depth |
-| `md:funding:{ex}:{sym}` | market-data | Funding rate |
-| `md:status` | market-data | Exchange status |
-| `cmd:rest-request` | any → market-data | REST command queue |
-| `risk:signals:drawdown` | risk-engine | Drawdown alerts |
-| `risk:signals:levels` | risk-engine | S/R levels |
-| `risk:signals:volatility` | risk-engine | ATR, regimes |
-| `risk:signals:exposure` | risk-engine | Exposure alerts |
-| `risk:alerts` | risk-engine | All alerts |
-| `hedge:state` | hedge-engine | Hedge state for UI |
-| `hedge:actions` | hedge-engine | Action log |
-| `trade:orders` | trade-execution | Order status |
-| `trade:journal` | trade-execution | Trade records |
+Все стримы пишутся через `XADD … MAXLEN ~ N` (approximate trimming). Никакой стрим не растёт неограниченно. Лимиты заданы в `<module>/src/bus/channels.ts`:
+
+| Key | Writer | MAXLEN ~ | Content |
+|-----|--------|---------:|---------|
+| `md:trades:{ex}:{sym}` | market-data | 10 000 | Trade updates |
+| `md:orderbook:{ex}:{sym}` | market-data | 5 000 | Orderbook depth |
+| `md:ticker:{ex}:{sym}` | market-data | 5 000 | Last price ticks |
+| `md:funding:{ex}:{sym}` | market-data | 1 000 | Funding rate |
+| `md:status` | market-data | 100 | Exchange status / funding-extreme signals |
+| `cmd:rest-request` | any → market-data | 1 000 | REST command queue |
+| `cmd:risk:subscribe` / `:unsubscribe` | gateway → risk-engine | 100 | Dynamic symbol lifecycle |
+| `cmd:trade:open` / `:close` / `:close-all` / `:calculate-size` | gateway → trade-exec | 100 | Trade commands |
+| `cmd:hedge:emergency` / `:unlock` | gateway → hedge-engine | 10 | Hedge commands |
+| `cmd:sim:trade:open` | gateway → sim | 100 | Sim trade commands |
+| `risk:signals:drawdown` | risk-engine | 5 000 | Drawdown alerts |
+| `risk:signals:levels` | risk-engine | 5 000 | S/R levels |
+| `risk:signals:volatility` | risk-engine | 5 000 | ATR, regimes |
+| `risk:signals:exposure` | risk-engine | 5 000 | Exposure alerts |
+| `risk:signals:correlation` | risk-engine | 1 000 | Correlation (placeholder) |
+| `risk:alerts` | risk-engine | 10 000 | All alerts |
+| `hedge:state` | hedge-engine | 5 000 | Hedge state for UI |
+| `hedge:actions` | hedge-engine | 10 000 | Action log |
+| `hedge:recommendations` | hedge-engine | 5 000 | Advisor output |
+| `trade:orders` | trade-execution | 10 000 | Order status |
+| `trade:journal` | trade-execution | 10 000 | Trade records |
+| `trade:equity:{accountId}` | trade-execution | 50 000 | Equity curve (live) |
+| `trade:router` | trade-execution | 1 000 | Smart-router events |
+| `sim:orders` | trade-execution sim | 5 000 | Paper orders |
+| `sim:journal` | trade-execution sim | 10 000 | Paper trade records |
+| `sim:equity-curve:{accountId}` | trade-execution sim | 50 000 | Sim equity curve |
+| `sim:events` | trade-execution sim | 2 000 | Order/position/account deltas |
+| `ml:rest-response:{reqId}` | market-data | n/a (deleted after read) | Single-use reply stream |
+
+Operators may call `GET /api/admin/streams` (api-gateway) to fetch live `XLEN` for every known stream plus auto-discovered per-symbol/per-account streams. Utilization (`length / MAXLEN`) flags streams approaching their cap.
 
 ### Snapshots (Redis GET/SET)
 - `snapshot:ob:{ex}:{sym}` — latest orderbook
@@ -134,6 +152,12 @@ React 19 + Vite + Tailwind.
 - `snapshot:funding:{ex}:{sym}` — latest funding
 - `risk:snapshot:exposure` — exposure data
 - `risk:snapshot:volatility:{ex}:{sym}` — volatility data
+- `risk:snapshot:levels:{ex}:{sym}` / `risk:snapshot:zones:{ex}:{sym}` — S/R levels & zones
+- `risk:snapshot:microstructure:{ex}:{sym}` — OFI / CVD / VPIN
+- `risk:snapshot:footprint:{ex}:{sym}` — footprint candles (1m × N)
+- `risk:snapshot:heatmap:{ex}:{sym}` — rolling orderbook history (windowMs)
+- `risk:snapshot:active-alerts` — currently-firing alerts
+- `risk:state:peak-equity` / `risk:state:daily-start-equity` — drawdown anchors
 - `hedge:snapshot:state` — hedge state
 - `rest:markets:{ex}` — cached markets (for UI search)
 

@@ -437,6 +437,20 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
+    // GET /api/admin/streams — XLEN for every known stream so operators can
+    // spot runaway growth at a glance. Per-symbol streams (md:*) are
+    // resolved at request time from the active subscription set.
+    if (path === "/api/admin/streams" && method === "GET") {
+      try {
+        const result = await collectStreamLengths(redis);
+        json(res, 200, result);
+      } catch (err) {
+        logger.warn({ err }, "Stream audit failed");
+        json(res, 500, { error: "audit_failed" });
+      }
+      return true;
+    }
+
     // GET /api/config/:module
     const configMatch = path.match(/^\/api\/config\/(.+)$/);
     if (configMatch && method === "GET") {
@@ -456,6 +470,108 @@ export function createTradeRoutes(redis: Redis) {
 
     return false; // Not handled
   };
+}
+
+// Streams whose key is known up-front (singletons) and the configured
+// MAXLEN for each. Per-symbol md:* streams are discovered via SCAN.
+const KNOWN_STREAM_LIMITS: Record<string, number> = {
+  // market-data
+  "md:status": 100,
+  // commands (gateway → services)
+  "cmd:rest-request": 1_000,
+  "cmd:risk:subscribe": 100,
+  "cmd:risk:unsubscribe": 100,
+  "cmd:trade:open": 100,
+  "cmd:trade:close": 100,
+  "cmd:trade:close-all": 100,
+  "cmd:trade:calculate-size": 100,
+  "cmd:hedge:emergency": 10,
+  "cmd:hedge:unlock": 10,
+  "cmd:sim:trade:open": 100,
+  // risk-engine signals
+  "risk:signals:drawdown": 5_000,
+  "risk:signals:levels": 5_000,
+  "risk:signals:volatility": 5_000,
+  "risk:signals:exposure": 5_000,
+  "risk:signals:correlation": 1_000,
+  "risk:alerts": 10_000,
+  // hedge-engine
+  "hedge:state": 5_000,
+  "hedge:actions": 10_000,
+  "hedge:recommendations": 5_000,
+  // trade-execution
+  "trade:orders": 10_000,
+  "trade:journal": 10_000,
+  "sim:orders": 5_000,
+  "sim:journal": 10_000,
+  "sim:events": 2_000,
+};
+
+// Wildcards for per-symbol / per-account streams; scanned at audit time.
+const STREAM_WILDCARDS = [
+  "md:trades:*",
+  "md:orderbook:*",
+  "md:ticker:*",
+  "md:funding:*",
+  "sim:equity-curve:*",
+];
+
+async function collectStreamLengths(
+  redis: Redis,
+): Promise<{
+  streams: Array<{
+    key: string;
+    length: number;
+    maxLen: number | null;
+    utilization: number | null;
+  }>;
+  scannedAt: number;
+}> {
+  const out: Array<{
+    key: string;
+    length: number;
+    maxLen: number | null;
+    utilization: number | null;
+  }> = [];
+
+  // Discover per-symbol streams via SCAN — Redis treats this lazily so
+  // doing a full keyspace walk on each audit call is fine for the size
+  // of keyspace this terminal produces (low thousands at most).
+  const discovered = new Set<string>();
+  for (const pattern of STREAM_WILDCARDS) {
+    let cursor = "0";
+    do {
+      const [next, batch] = await redis.scan(
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        500,
+        "TYPE",
+        "stream",
+      );
+      cursor = next;
+      for (const k of batch) discovered.add(k);
+    } while (cursor !== "0");
+  }
+
+  const candidates = [...Object.keys(KNOWN_STREAM_LIMITS), ...discovered];
+  for (const key of candidates) {
+    try {
+      const length = await redis.xlen(key);
+      const maxLen = KNOWN_STREAM_LIMITS[key] ?? null;
+      out.push({
+        key,
+        length,
+        maxLen,
+        utilization: maxLen ? Math.round((length / maxLen) * 100) : null,
+      });
+    } catch {
+      // Stream may not exist yet — skip silently.
+    }
+  }
+  out.sort((a, b) => b.length - a.length);
+  return { streams: out, scannedAt: Date.now() };
 }
 
 async function callRest(
