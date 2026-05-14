@@ -6,8 +6,12 @@ export const config: RiskEngineConfig = {
   redis: {
     url: env.REDIS_URL ?? "redis://localhost:6379",
   },
-  exchanges: (env.RISK_EXCHANGES ?? "binance,bybit").split(",").map((s) => s.trim()),
-  symbols: (env.RISK_SYMBOLS ?? "BTC/USDT:USDT,ETH/USDT:USDT").split(",").map((s) => s.trim()),
+  exchanges: (env.RISK_EXCHANGES ?? "binance,bybit")
+    .split(",")
+    .map((s) => s.trim()),
+  symbols: (env.RISK_SYMBOLS ?? "BTC/USDT:USDT,ETH/USDT:USDT")
+    .split(",")
+    .map((s) => s.trim()),
   pollIntervalMs: Number(env.POLL_INTERVAL_MS) || 5000,
 
   drawdown: {
@@ -39,6 +43,13 @@ export const config: RiskEngineConfig = {
     spoofFlickerCount: 3,
     ohlcvTimeframes: ["5m", "15m", "1h", "4h"],
     swingLookback: 5,
+  },
+
+  microstructure: {
+    tradeWindowMs: 60_000,
+    imbalanceDepth: 10,
+    vpinBucketVolume: 5000, // Reduced from 10k to $5k for maximum reactivity
+    vpinBucketCount: 30,
   },
 
   alerts: {

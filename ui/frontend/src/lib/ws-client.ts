@@ -15,13 +15,21 @@ class WsClient {
   }
 
   connect(): void {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    )
+      return;
 
     const ws = new WebSocket(this.url);
     this.ws = ws;
 
     ws.onopen = () => {
-      if (this.ws !== ws) { ws.close(); return; }
+      if (this.ws !== ws) {
+        ws.close();
+        return;
+      }
       console.log("[WS] Connected");
       for (const channel of this.handlers.keys()) {
         this.send({ action: "subscribe", channel });
@@ -37,7 +45,10 @@ class WsClient {
 
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data as string) as { channel: string; data: Record<string, unknown> };
+        const msg = JSON.parse(event.data as string) as {
+          channel: string;
+          data: Record<string, unknown>;
+        };
         const handlers = this.handlers.get(msg.channel);
         if (handlers) {
           for (const handler of handlers) handler(msg.data);
@@ -59,7 +70,10 @@ class WsClient {
     };
   }
 
-  subscribe<T = Record<string, unknown>>(channel: string, handler: MessageHandler<T>): () => void {
+  subscribe<T = Record<string, unknown>>(
+    channel: string,
+    handler: MessageHandler<T>,
+  ): () => void {
     if (!this.handlers.has(channel)) {
       this.handlers.set(channel, new Set());
       if (this.ws?.readyState === WebSocket.OPEN) {
@@ -115,21 +129,30 @@ class WsClient {
 
   static resolveUrl(): string {
     const host = window.location.host;
-    // In Tauri or file:// — connect to gateway directly
-    if (!host || host.includes('tauri.localhost') || window.location.protocol === 'file:') {
-      return 'ws://localhost:3001/ws';
+    // In development (3000) or Tauri/file — connect to gateway (3001) directly for stability
+    if (
+      !host ||
+      host.includes("localhost:3000") ||
+      host.includes("tauri.localhost") ||
+      window.location.protocol === "file:"
+    ) {
+      return "ws://localhost:3001/ws";
     }
-    // In dev (Vite proxy) — use same host
+    // In production (same host)
     return `ws://${host}/ws`;
   }
 }
 
 export const API_BASE = (() => {
   const host = window.location.host;
-  if (!host || host.includes('tauri.localhost') || window.location.protocol === 'file:') {
-    return 'http://localhost:3001';
+  if (
+    !host ||
+    host.includes("tauri.localhost") ||
+    window.location.protocol === "file:"
+  ) {
+    return "http://localhost:3001";
   }
-  return '';
+  return "";
 })();
 
 export const wsClient = new WsClient();

@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { LayoutItem, Layout } from 'react-grid-layout';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { LayoutItem, Layout } from "react-grid-layout";
 
 export type { LayoutItem, Layout };
 
@@ -18,39 +18,124 @@ export interface Pane {
   layout: LayoutItem[];
 }
 
-export const WIDGET_REGISTRY: Record<string, { title: string; defaultW: number; defaultH: number; minW?: number; minH?: number }> = {
-  orderbook: { title: 'Order Book', defaultW: 4, defaultH: 8, minW: 3, minH: 4 },
-  trades: { title: 'Tape', defaultW: 8, defaultH: 3, minW: 3, minH: 2 },
-  volumeProfile: { title: 'Volume Profile', defaultW: 3, defaultH: 8, minW: 2, minH: 4 },
-  heatmap: { title: 'Liquidity Heatmap', defaultW: 6, defaultH: 7, minW: 4, minH: 4 },
-  funding: { title: 'Funding', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  volatility: { title: 'Volatility / ATR', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  levels: { title: 'Key Levels', defaultW: 3, defaultH: 6, minW: 2, minH: 4 },
-  chart: { title: 'Sparkline', defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
-  candleChart: { title: 'Candle Chart', defaultW: 6, defaultH: 7, minW: 4, minH: 5 },
-  tradeForm: { title: 'Trade Form', defaultW: 3, defaultH: 5, minW: 2, minH: 3 },
-  drawdown: { title: 'Drawdown', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  exposure: { title: 'Exposure', defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  alerts: { title: 'Alerts', defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
-  hedge: { title: 'Hedge Engine', defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
-  simPositions: { title: 'Sim Positions', defaultW: 6, defaultH: 4, minW: 4, minH: 2 },
-  simJournal: { title: 'Sim Journal', defaultW: 6, defaultH: 6, minW: 4, minH: 4 },
+export const WIDGET_REGISTRY: Record<
+  string,
+  {
+    title: string;
+    defaultW: number;
+    defaultH: number;
+    minW?: number;
+    minH?: number;
+  }
+> = {
+  orderbook: {
+    title: "Order Book",
+    defaultW: 4,
+    defaultH: 8,
+    minW: 3,
+    minH: 4,
+  },
+  trades: { title: "Tape", defaultW: 8, defaultH: 3, minW: 3, minH: 2 },
+  volumeProfile: {
+    title: "Volume Profile",
+    defaultW: 3,
+    defaultH: 8,
+    minW: 2,
+    minH: 4,
+  },
+  heatmap: {
+    title: "Liquidity Heatmap",
+    defaultW: 6,
+    defaultH: 7,
+    minW: 4,
+    minH: 4,
+  },
+  funding: { title: "Funding", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  volatility: {
+    title: "Volatility / ATR",
+    defaultW: 3,
+    defaultH: 4,
+    minW: 2,
+    minH: 3,
+  },
+  levels: { title: "Key Levels", defaultW: 3, defaultH: 6, minW: 2, minH: 4 },
+  chart: { title: "Sparkline", defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+  candleChart: {
+    title: "Candle Chart",
+    defaultW: 6,
+    defaultH: 7,
+    minW: 4,
+    minH: 5,
+  },
+  tradeForm: {
+    title: "Trade Form",
+    defaultW: 3,
+    defaultH: 5,
+    minW: 2,
+    minH: 3,
+  },
+  drawdown: { title: "Drawdown", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  exposure: { title: "Exposure", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  alerts: { title: "Alerts", defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
+  microstructure: {
+    title: "Microstructure",
+    defaultW: 3,
+    defaultH: 8,
+    minW: 2,
+    minH: 4,
+  },
+  hedge: { title: "Hedge Engine", defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
+  simPositions: {
+    title: "Sim Positions",
+    defaultW: 6,
+    defaultH: 4,
+    minW: 4,
+    minH: 2,
+  },
+  simJournal: {
+    title: "Sim Journal",
+    defaultW: 6,
+    defaultH: 6,
+    minW: 4,
+    minH: 4,
+  },
 };
 
 function makeDefaultPane(id: string, name: string): Pane {
   return {
-    id, name,
+    id,
+    name,
     widgets: [
-      { id: `${id}_ob1`, type: 'orderbook', title: 'BTC Order Book', props: { panelIndex: 0 } },
-      { id: `${id}_ob2`, type: 'orderbook', title: 'ETH Order Book', props: { panelIndex: 1 } },
-      { id: `${id}_chart1`, type: 'chart', title: 'BTC Sparkline', props: { panelIndex: 0 } },
-      { id: `${id}_chart2`, type: 'chart', title: 'ETH Sparkline', props: { panelIndex: 1 } },
-      { id: `${id}_trades`, type: 'trades', title: 'Trades' },
-      { id: `${id}_form`, type: 'tradeForm', title: 'Trade' },
-      { id: `${id}_dd`, type: 'drawdown', title: 'Drawdown' },
-      { id: `${id}_exp`, type: 'exposure', title: 'Exposure' },
-      { id: `${id}_alerts`, type: 'alerts', title: 'Alerts' },
-      { id: `${id}_hedge`, type: 'hedge', title: 'Hedge' },
+      {
+        id: `${id}_ob1`,
+        type: "orderbook",
+        title: "BTC Order Book",
+        props: { panelIndex: 0 },
+      },
+      {
+        id: `${id}_ob2`,
+        type: "orderbook",
+        title: "ETH Order Book",
+        props: { panelIndex: 1 },
+      },
+      {
+        id: `${id}_chart1`,
+        type: "chart",
+        title: "BTC Sparkline",
+        props: { panelIndex: 0 },
+      },
+      {
+        id: `${id}_chart2`,
+        type: "chart",
+        title: "ETH Sparkline",
+        props: { panelIndex: 1 },
+      },
+      { id: `${id}_trades`, type: "trades", title: "Trades" },
+      { id: `${id}_form`, type: "tradeForm", title: "Trade" },
+      { id: `${id}_dd`, type: "drawdown", title: "Drawdown" },
+      { id: `${id}_exp`, type: "exposure", title: "Exposure" },
+      { id: `${id}_alerts`, type: "alerts", title: "Alerts" },
+      { id: `${id}_hedge`, type: "hedge", title: "Hedge" },
     ],
     layout: [
       { i: `${id}_ob1`, x: 0, y: 0, w: 4, h: 8, minW: 3, minH: 4 },
@@ -69,11 +154,12 @@ function makeDefaultPane(id: string, name: string): Pane {
 
 function makeChartPane(id: string, name: string): Pane {
   return {
-    id, name,
+    id,
+    name,
     widgets: [
-      { id: `${id}_candle`, type: 'candleChart', title: 'BTC Chart' },
-      { id: `${id}_trades`, type: 'trades', title: 'Trades' },
-      { id: `${id}_alerts`, type: 'alerts', title: 'Alerts' },
+      { id: `${id}_candle`, type: "candleChart", title: "BTC Chart" },
+      { id: `${id}_trades`, type: "trades", title: "Trades" },
+      { id: `${id}_alerts`, type: "alerts", title: "Alerts" },
     ],
     layout: [
       { i: `${id}_candle`, x: 0, y: 0, w: 8, h: 10, minW: 4, minH: 5 },
@@ -84,8 +170,8 @@ function makeChartPane(id: string, name: string): Pane {
 }
 
 const DEFAULT_PANES: Pane[] = [
-  makeDefaultPane('scalper', 'Scalper'),
-  makeChartPane('chart', 'Chart'),
+  makeDefaultPane("scalper", "Scalper"),
+  makeChartPane("chart", "Chart"),
 ];
 
 interface LayoutStore {
@@ -122,7 +208,7 @@ export const useLayoutStore = create<LayoutStore>()(
       setLayout: (layout) =>
         set((s) => ({
           panes: s.panes.map((p) =>
-            p.id === s.activePaneId ? { ...p, layout: [...layout] } : p
+            p.id === s.activePaneId ? { ...p, layout: [...layout] } : p,
           ),
         })),
 
@@ -136,13 +222,20 @@ export const useLayoutStore = create<LayoutStore>()(
               ? {
                   ...p,
                   widgets: [...p.widgets, { id, type, title: reg.title }],
-                  layout: [...p.layout, {
-                    i: id, x: 0, y: 999,
-                    w: reg.defaultW, h: reg.defaultH,
-                    minW: reg.minW, minH: reg.minH,
-                  }],
+                  layout: [
+                    ...p.layout,
+                    {
+                      i: id,
+                      x: 0,
+                      y: 999,
+                      w: reg.defaultW,
+                      h: reg.defaultH,
+                      minW: reg.minW,
+                      minH: reg.minH,
+                    },
+                  ],
                 }
-              : p
+              : p,
           ),
         }));
       },
@@ -156,7 +249,7 @@ export const useLayoutStore = create<LayoutStore>()(
                   widgets: p.widgets.filter((w) => w.id !== id),
                   layout: p.layout.filter((l) => l.i !== id),
                 }
-              : p
+              : p,
           ),
         })),
 
@@ -165,7 +258,9 @@ export const useLayoutStore = create<LayoutStore>()(
           panes: s.panes.map((p) => ({
             ...p,
             widgets: p.widgets.map((w) =>
-              w.id === id ? { ...w, props: { ...(w.props ?? {}), ...props } } : w,
+              w.id === id
+                ? { ...w, props: { ...(w.props ?? {}), ...props } }
+                : w,
             ),
           })),
         })),
@@ -197,12 +292,25 @@ export const useLayoutStore = create<LayoutStore>()(
         set((s) => ({
           panes: s.panes.map((p) =>
             p.id === s.activePaneId
-              ? { ...p, widgets: p.widgets.map((w) => w.id === id ? { ...w, title } : w) }
-              : p
+              ? {
+                  ...p,
+                  widgets: p.widgets.map((w) =>
+                    w.id === id ? { ...w, title } : w,
+                  ),
+                }
+              : p,
           ),
         })),
 
-      resetLayout: () => set({ panes: DEFAULT_PANES.map((p) => ({ ...p, layout: [...p.layout], widgets: [...p.widgets] })), activePaneId: DEFAULT_PANES[0]!.id }),
+      resetLayout: () =>
+        set({
+          panes: DEFAULT_PANES.map((p) => ({
+            ...p,
+            layout: [...p.layout],
+            widgets: [...p.widgets],
+          })),
+          activePaneId: DEFAULT_PANES[0]!.id,
+        }),
 
       activePane: () => {
         const s = get();
@@ -210,8 +318,12 @@ export const useLayoutStore = create<LayoutStore>()(
       },
     }),
     {
-      name: 'sun-layout',
-      partialize: (s) => ({ panes: s.panes, activePaneId: s.activePaneId, sidebarOpen: s.sidebarOpen }),
+      name: "sun-layout",
+      partialize: (s) => ({
+        panes: s.panes,
+        activePaneId: s.activePaneId,
+        sidebarOpen: s.sidebarOpen,
+      }),
     },
   ),
 );
