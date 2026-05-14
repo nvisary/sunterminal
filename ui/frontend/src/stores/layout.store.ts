@@ -1,6 +1,26 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { LayoutItem, Layout } from "react-grid-layout";
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  BookOpen,
+  Briefcase,
+  CandlestickChart,
+  Crosshair,
+  Flame,
+  LineChart,
+  ListOrdered,
+  Network,
+  Percent,
+  SendHorizontal,
+  Shield,
+  TrendingDown,
+  Waves,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
 
 export type { LayoutItem, Layout };
 
@@ -18,30 +38,40 @@ export interface Pane {
   layout: LayoutItem[];
 }
 
-export const WIDGET_REGISTRY: Record<
-  string,
-  {
-    title: string;
-    defaultW: number;
-    defaultH: number;
-    minW?: number;
-    minH?: number;
-  }
-> = {
+export interface WidgetRegistryEntry {
+  title: string;
+  defaultW: number;
+  defaultH: number;
+  minW?: number;
+  minH?: number;
+  icon: LucideIcon;
+  disabled?: boolean;
+}
+
+export const WIDGET_REGISTRY: Record<string, WidgetRegistryEntry> = {
   orderbook: {
     title: "Order Book",
     defaultW: 4,
     defaultH: 8,
     minW: 3,
     minH: 4,
+    icon: ListOrdered,
   },
-  trades: { title: "Tape", defaultW: 8, defaultH: 3, minW: 3, minH: 2 },
+  trades: {
+    title: "Tape",
+    defaultW: 8,
+    defaultH: 3,
+    minW: 3,
+    minH: 2,
+    icon: Activity,
+  },
   volumeProfile: {
     title: "Volume Profile",
     defaultW: 3,
     defaultH: 8,
     minW: 2,
     minH: 4,
+    icon: BarChart3,
   },
   heatmap: {
     title: "Liquidity Heatmap",
@@ -49,23 +79,47 @@ export const WIDGET_REGISTRY: Record<
     defaultH: 7,
     minW: 4,
     minH: 4,
+    icon: Flame,
   },
-  funding: { title: "Funding", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
+  funding: {
+    title: "Funding",
+    defaultW: 3,
+    defaultH: 4,
+    minW: 2,
+    minH: 3,
+    icon: Percent,
+  },
   volatility: {
     title: "Volatility / ATR",
     defaultW: 3,
     defaultH: 4,
     minW: 2,
     minH: 3,
+    icon: Waves,
   },
-  levels: { title: "Key Levels", defaultW: 3, defaultH: 6, minW: 2, minH: 4 },
-  chart: { title: "Sparkline", defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+  levels: {
+    title: "Key Levels",
+    defaultW: 3,
+    defaultH: 6,
+    minW: 2,
+    minH: 4,
+    icon: Crosshair,
+  },
+  chart: {
+    title: "Sparkline",
+    defaultW: 4,
+    defaultH: 3,
+    minW: 3,
+    minH: 2,
+    icon: LineChart,
+  },
   candleChart: {
     title: "Candle Chart",
     defaultW: 6,
     defaultH: 7,
     minW: 4,
     minH: 5,
+    icon: CandlestickChart,
   },
   tradeForm: {
     title: "Trade Form",
@@ -73,24 +127,59 @@ export const WIDGET_REGISTRY: Record<
     defaultH: 5,
     minW: 2,
     minH: 3,
+    icon: SendHorizontal,
+    disabled: true,
   },
-  drawdown: { title: "Drawdown", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  exposure: { title: "Exposure", defaultW: 3, defaultH: 4, minW: 2, minH: 3 },
-  alerts: { title: "Alerts", defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
+  drawdown: {
+    title: "Drawdown",
+    defaultW: 3,
+    defaultH: 4,
+    minW: 2,
+    minH: 3,
+    icon: TrendingDown,
+    disabled: true,
+  },
+  exposure: {
+    title: "Exposure",
+    defaultW: 3,
+    defaultH: 4,
+    minW: 2,
+    minH: 3,
+    icon: Wallet,
+    disabled: true,
+  },
+  alerts: {
+    title: "Alerts",
+    defaultW: 6,
+    defaultH: 4,
+    minW: 3,
+    minH: 2,
+    icon: BellRing,
+  },
   microstructure: {
     title: "Microstructure",
     defaultW: 3,
     defaultH: 8,
     minW: 2,
     minH: 4,
+    icon: Network,
   },
-  hedge: { title: "Hedge Engine", defaultW: 6, defaultH: 4, minW: 3, minH: 2 },
+  hedge: {
+    title: "Hedge Engine",
+    defaultW: 6,
+    defaultH: 4,
+    minW: 3,
+    minH: 2,
+    icon: Shield,
+    disabled: true,
+  },
   simPositions: {
     title: "Sim Positions",
     defaultW: 6,
     defaultH: 4,
     minW: 4,
     minH: 2,
+    icon: Briefcase,
   },
   simJournal: {
     title: "Sim Journal",
@@ -98,6 +187,7 @@ export const WIDGET_REGISTRY: Record<
     defaultH: 6,
     minW: 4,
     minH: 4,
+    icon: BookOpen,
   },
 };
 
@@ -214,7 +304,7 @@ export const useLayoutStore = create<LayoutStore>()(
 
       addWidget: (type) => {
         const reg = WIDGET_REGISTRY[type];
-        if (!reg) return;
+        if (!reg || reg.disabled) return;
         const id = `${type}_${++counter}`;
         set((s) => ({
           panes: s.panes.map((p) =>

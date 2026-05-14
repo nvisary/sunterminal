@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { GridLayout, verticalCompactor } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
+import { GripVertical } from "lucide-react";
 import { OrderBookWidget } from "../widgets/OrderBookWidget";
 import { PriceChartWidget } from "../widgets/PriceChartWidget";
 import { TradesWidget } from "../widgets/TradesWidget";
@@ -130,7 +131,11 @@ function WidgetWrapper({
       className="h-full flex flex-col bg-[#0c0c14] rounded border"
       style={{ borderColor: borderColor ?? "#1a1a2a" }}
     >
-      <div className="drag-handle flex items-center gap-1 px-2 py-0.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0">
+      <div className="drag-handle flex items-center gap-1 px-2 py-1.5 bg-[#0a0a10] border-b border-[#1a1a2a] cursor-move shrink-0 select-none">
+        <GripVertical
+          size={12}
+          className="text-gray-700 shrink-0 pointer-events-none"
+        />
         {ctl.isSymbolWidget ? (
           <>
             <SyncDot widgetId={widget.id} />
@@ -152,10 +157,13 @@ function WidgetWrapper({
             {widget.title}
           </span>
         )}
-        <HelpPopover widgetType={widget.type} />
+        <div onMouseDown={(e) => e.stopPropagation()} className="shrink-0">
+          <HelpPopover widgetType={widget.type} />
+        </div>
         <button
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={onRemove}
-          className="text-[10px] text-gray-700 hover:text-red-400 px-1"
+          className="text-[10px] text-gray-700 hover:text-red-400 px-1 shrink-0"
           title="Close widget"
         >
           x
@@ -383,18 +391,37 @@ export function TradingPage({ onOpenLogs }: { onOpenLogs?: () => void }) {
               className="absolute top-full left-0 mt-1 w-40 bg-[#12121e] border border-[#2a2a3a] rounded shadow-lg z-50"
               onMouseLeave={() => setShowAddMenu(false)}
             >
-              {Object.entries(WIDGET_REGISTRY).map(([type, reg]) => (
-                <button
-                  key={type}
-                  onClick={() => {
-                    store.addWidget(type);
-                    setShowAddMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white"
-                >
-                  {reg.title}
-                </button>
-              ))}
+              {Object.entries(WIDGET_REGISTRY).map(([type, reg]) => {
+                const Icon = reg.icon;
+                if (reg.disabled) {
+                  return (
+                    <div
+                      key={type}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-500 opacity-50 cursor-not-allowed"
+                      title="Coming soon"
+                    >
+                      <Icon size={14} className="shrink-0" />
+                      <span className="flex-1 truncate">{reg.title}</span>
+                      <span className="text-[9px] text-gray-600 uppercase">
+                        soon
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    key={type}
+                    onClick={() => {
+                      store.addWidget(type);
+                      setShowAddMenu(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-300 hover:bg-[#1e1e3e] hover:text-white"
+                  >
+                    <Icon size={14} className="shrink-0 text-gray-400" />
+                    <span className="truncate">{reg.title}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
