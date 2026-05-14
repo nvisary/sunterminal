@@ -31,6 +31,28 @@ import pino from "pino";
 
 const logger = pino({ name: "market-data-service" });
 
+// Private CCXT methods that require API credentials. Listed here so we can
+// reject calls before they hit ccxt and dump a stack trace from deep inside
+// auth helpers like isUnifiedEnabled / sign / fetch2.
+const PRIVATE_CCXT_METHODS = new Set<string>([
+  "fetchBalance",
+  "fetchPositions",
+  "fetchPosition",
+  "fetchOpenOrders",
+  "fetchClosedOrders",
+  "fetchOrders",
+  "fetchOrder",
+  "fetchMyTrades",
+  "fetchLeverage",
+  "setLeverage",
+  "createOrder",
+  "cancelOrder",
+  "cancelAllOrders",
+  "editOrder",
+  "fetchDeposits",
+  "fetchWithdrawals",
+]);
+
 interface SubscriptionHandle {
   controllers: AbortController[];
   refCount: number;
@@ -399,6 +421,16 @@ export class MarketDataService {
         throw new Error(`Unknown method: ${cmd.method}`);
       }
 
+      // Short-circuit private/account methods when no API keys are configured.
+      // ccxt would otherwise throw deep inside isUnifiedEnabled / fetch2 with a
+      // stack-trace dump on every poll. Risk-engine logs the rejection, then
+      // backs off cleanly.
+      if (PRIVATE_CCXT_METHODS.has(cmd.method)
+          && (!(exchange as { apiKey?: string }).apiKey
+              || !(exchange as { secret?: string }).secret)) {
+        throw new Error(`No API credentials for ${cmd.exchange}; cannot call ${cmd.method}`);
+      }
+
       const result = await (method as (...args: unknown[]) => Promise<unknown>).apply(
         exchange,
         cmd.args
@@ -412,7 +444,15 @@ export class MarketDataService {
         );
       }
     } catch (err) {
-      logger.error({ cmd, err }, "REST command failed");
+      // "No API credentials" is expected when running without keys — log at
+      // debug level so we don't spam the console with full stacks. Real errors
+      // still come through at error level.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith("No API credentials")) {
+        logger.debug({ exchange: cmd.exchange, method: cmd.method }, "skipped: no API credentials");
+      } else {
+        logger.error({ cmd, err }, "REST command failed");
+      }
       if (cmd.replyTo) {
         await this.bus.publish(
           cmd.replyTo,

@@ -50,6 +50,11 @@ export const SimStreamKeys = {
   drawdown: "sim:drawdown",
   exposure: "sim:exposure",
   equity: (accountId: string) => `sim:equity-curve:${accountId}`,
+  // Unified event stream for the UI: every state-change the user cares about
+  // (order placed/canceled/filled, position opened/closed, account updated)
+  // is fanned out here. UI subscribes once and applies deltas locally — no
+  // more poll-and-replace cycles.
+  events: "sim:events",
 } as const;
 
 export const SimHashKeys = {
@@ -72,6 +77,9 @@ export const SimStreamMaxLen = {
   drawdown: 5_000,
   exposure: 5_000,
   equity: 50_000,
+  // Events are short-lived (UI consumes them in real-time). Cap is mainly to
+  // keep Redis memory bounded.
+  events: 2_000,
 } as const;
 
 /**

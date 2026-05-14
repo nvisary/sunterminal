@@ -204,6 +204,9 @@ export class RedisSubscriber {
     }
     if (channel === "sim:journal") return "sim:journal";
     if (channel === "sim:orders") return "sim:orders";
+    // Unified event stream: order/position/account deltas the UI applies
+    // to its local model instead of polling.
+    if (channel === "sim:events") return "sim:events";
     if (channel.startsWith("sim:equity-curve:")) return channel; // already includes accountId
 
     // Dynamic: orderbook:{exchange}:{symbol} -> md:orderbook:{exchange}:{symbol}

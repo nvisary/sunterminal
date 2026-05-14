@@ -6,6 +6,9 @@ class WsClient {
   private pendingSubscriptions = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string;
+  // Called every time the socket opens, including reconnects. Consumers use
+  // this to re-bootstrap state via REST after a gap.
+  private reconnectListeners = new Set<() => void>();
 
   constructor(url: string = WsClient.resolveUrl()) {
     this.url = url;
@@ -35,6 +38,9 @@ class WsClient {
         this.send({ action: "subscribe", channel });
       }
       this.pendingSubscriptions.clear();
+      for (const cb of this.reconnectListeners) {
+        try { cb(); } catch { /* ignore */ }
+      }
     };
 
     ws.onmessage = (event) => {
@@ -97,6 +103,16 @@ class WsClient {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
     this.ws = null;
+  }
+
+  /**
+   * Register a callback that runs every time the socket opens — both the
+   * initial connect and any subsequent reconnect. Use for re-bootstrapping
+   * state that may have drifted while disconnected.
+   */
+  onReconnect(cb: () => void): () => void {
+    this.reconnectListeners.add(cb);
+    return () => { this.reconnectListeners.delete(cb); };
   }
 
   private send(msg: Record<string, unknown>): void {

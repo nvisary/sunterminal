@@ -13,9 +13,10 @@ import {
 } from './dom/analytics';
 import { HeatmapStrip, type DomSnapshot, type DomLadderRow } from './dom/HeatmapStrip';
 
-// Liquidity heatmap strip parameters — small window so the strip stays
-// "live" and reactive next to the current ladder.
-const HEATMAP_WINDOW_MS = 12_000;
+// Liquidity heatmap strip parameters. Window length is user-tunable via the
+// settings menu — short for scalping context, long to spot stacked levels.
+const HEATMAP_WINDOW_OPTIONS_SEC = [5, 12, 30, 60, 120, 300] as const;
+const HEATMAP_WINDOW_DEFAULT_SEC = 12;
 const HEATMAP_SNAP_MS = 250;
 const HEATMAP_W = 84;
 
@@ -137,22 +138,31 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   const persisted = (widget?.props ?? {}) as {
     tickIdx?: number; mode?: DomMode;
     showVP?: boolean; showHeatmap?: boolean; flashEnabled?: boolean; qty?: string;
+    heatmapWindowSec?: number;
   };
 
   const [tickIdx, setTickIdx] = useState<number>(persisted.tickIdx ?? TICK_DEFAULT_IDX);
   const [mode, setMode] = useState<DomMode>(persisted.mode ?? 'dynamic');
   const [scrollOffset, setScrollOffset] = useState(0);
+  // Hysteresis-anchored center in dynamic mode. The ladder stays put across
+  // small mid-price wobbles and only recenters when mid drifts outside the
+  // band — kills the per-tick jitter that made the DOM unreadable.
+  const [centerTick, setCenterTick] = useState<number | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [qty, setQty] = useState<string>(persisted.qty ?? '0.01');
   const [showVP, setShowVP] = useState<boolean>(persisted.showVP ?? true);
   const [showHeatmap, setShowHeatmap] = useState<boolean>(persisted.showHeatmap ?? false);
   const [flashEnabled, setFlashEnabled] = useState<boolean>(persisted.flashEnabled ?? true);
+  const [heatmapWindowSec, setHeatmapWindowSec] = useState<number>(
+    persisted.heatmapWindowSec ?? HEATMAP_WINDOW_DEFAULT_SEC,
+  );
+  const heatmapWindowMs = heatmapWindowSec * 1000;
 
   // Persist UI state to widget.props so it survives reloads / pane swaps.
   useEffect(() => {
     if (!widget?.id) return;
-    updateWidgetProps(widget.id, { tickIdx, mode, showVP, showHeatmap, flashEnabled, qty });
-  }, [widget?.id, tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, updateWidgetProps]);
+    updateWidgetProps(widget.id, { tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec });
+  }, [widget?.id, tickIdx, mode, showVP, showHeatmap, flashEnabled, qty, heatmapWindowSec, updateWidgetProps]);
 
   const ladderRef = useRef<HTMLDivElement>(null);
   const [containerH, setContainerH] = useState(400);
@@ -195,12 +205,17 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
 
   // Reset scroll position when symbol changes (different price scale).
   useEffect(() => { setScrollOffset(0); }, [exchange, symbol]);
+  // Reset anchored center on symbol / aggregation changes — old tick basis
+  // would otherwise leave the ladder off-screen.
+  useEffect(() => { setCenterTick(null); }, [exchange, symbol, tickIdx, mode]);
 
-  // Pull open orders for the current symbol on mount, mode-switch, or symbol-change.
-  // Poll periodically so fills/cancels from elsewhere reflect in the DOM.
+  // Open orders are pushed via the sim:events WS stream (see lib/sim-events).
+  // We still call syncOrders once on mount / symbol change so a freshly-shown
+  // symbol pulls its current orders if the events stream hasn't fired yet,
+  // and as a safety net every 30s in case an event got dropped.
   useEffect(() => {
     syncOrders(exchange, symbol);
-    const t = setInterval(() => syncOrders(exchange, symbol), 5_000);
+    const t = setInterval(() => syncOrders(exchange, symbol), 30_000);
     return () => clearInterval(t);
   }, [exchange, symbol, tradingMode, syncOrders]);
 
@@ -235,13 +250,13 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
         asks: aggregateLevels(ob.asks, tickSize),
       };
       snapshotsRef.current.push(snap);
-      const cutoff = Date.now() - HEATMAP_WINDOW_MS;
+      const cutoff = Date.now() - heatmapWindowMs;
       while (snapshotsRef.current.length && snapshotsRef.current[0]!.t < cutoff) {
         snapshotsRef.current.shift();
       }
     }, HEATMAP_SNAP_MS);
     return () => clearInterval(id);
-  }, [showHeatmap, key, tickSize]);
+  }, [showHeatmap, key, tickSize, heatmapWindowMs]);
 
   const tape = useMemo(
     () => computeTapeSpeed(recentTradesRef.current, 2000),
@@ -272,9 +287,19 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
   };
 
   if (mode === 'dynamic') {
-    const centerTick = roundTick(Math.round(midPrice / tickSize) * tickSize, tickSize);
+    const idealCenter = roundTick(Math.round(midPrice / tickSize) * tickSize, tickSize);
+    // Band: ~quarter of the visible ladder. Mid stays near center but doesn't
+    // chase every micro-tick. 6 ticks minimum so very tall windows still feel
+    // anchored.
+    const band = Math.max(6, Math.floor(totalRows / 4)) * tickSize;
+    let anchor = centerTick;
+    if (anchor === null || !Number.isFinite(anchor) || Math.abs(idealCenter - anchor) > band) {
+      anchor = idealCenter;
+      // Defer state update out of render path.
+      if (centerTick !== anchor) queueMicrotask(() => setCenterTick(anchor));
+    }
     for (let i = Math.floor(totalRows / 2); i >= -Math.ceil(totalRows / 2); i--) {
-      const p = roundTick(centerTick + (i + scrollOffset) * tickSize, tickSize);
+      const p = roundTick(anchor + (i + scrollOffset) * tickSize, tickSize);
       const askVol = aggAsks.get(p) ?? 0;
       const bidVol = aggBids.get(p) ?? 0;
       let side: 'ask' | 'bid';
@@ -431,6 +456,25 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
                       <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
                       Liquidity heatmap
                     </label>
+                    {showHeatmap && (
+                      <div className="flex items-center gap-1 pl-4 text-[10px] text-gray-500">
+                        <span>Window</span>
+                        <div className="flex gap-0.5">
+                          {HEATMAP_WINDOW_OPTIONS_SEC.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => setHeatmapWindowSec(s)}
+                              className={`px-1 py-0.5 rounded border text-[9px] tabular-nums ${
+                                heatmapWindowSec === s
+                                  ? 'bg-blue-700/40 border-blue-500 text-blue-200'
+                                  : 'border-[#2a2a3a] text-gray-400 hover:border-gray-500'
+                              }`}
+                              title={`${s} seconds of orderbook history`}
+                            >{s < 60 ? `${s}s` : `${s / 60}m`}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
                       <input type="checkbox" checked={flashEnabled} onChange={(e) => setFlashEnabled(e.target.checked)} />
                       Flash large
@@ -454,10 +498,14 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
             </span>
       </div>
 
-      {/* Open limit orders banner — every resting order shown explicitly so the
-          user can see what's been placed even if it's far off-screen in the DOM. */}
+      {/* Banner-overlay container: banners float on top of the ladder so they
+          don't push it down when they appear. Ladder is absolutely positioned
+          inside this wrapper, so its clientHeight is constant regardless of
+          banner state and no row reflow happens. */}
+      <div className="relative flex-1 min-h-0">
+      <div className="absolute top-0 left-0 right-0 z-30 flex flex-col pointer-events-none">
       {symOrders.length > 0 && (
-        <div className="flex flex-col gap-0.5 px-2 py-1 border-b border-blue-700/40 bg-blue-950/30 text-[10px] shrink-0">
+        <div className="flex flex-col gap-0.5 px-2 py-1 border-b border-blue-700/40 bg-blue-950/95 text-[10px] pointer-events-auto">
           {symOrders.map((o) => (
             <div key={o.id} className="flex items-center gap-2">
               <span className={`font-bold ${o.side === 'buy' ? 'text-green-400' : 'text-red-400'}`}>
@@ -484,18 +532,33 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
 
       {/* Sim position banner — gives immediate feedback that an order filled. */}
       {simPosition && (
-        <div className="flex items-center gap-2 px-2 py-1 border-b border-yellow-700/40 bg-yellow-950/30 text-[10px] shrink-0">
+        <div className="flex items-center gap-2 px-2 py-1 border-b border-yellow-700/40 bg-yellow-950/95 text-[10px] pointer-events-auto">
           <span className={`font-bold ${simPosition.side === 'long' ? 'text-green-400' : 'text-red-400'}`}>
             {simPosition.side === 'long' ? 'LONG' : 'SHORT'} {simPosition.size.toFixed(4)}
           </span>
           <span className="text-gray-400">
             @ <span className="text-gray-200 font-mono">{simPosition.entryPrice.toFixed(dp)}</span>
           </span>
-          {simPosition.unrealizedPnl != null && (
-            <span className={`font-mono ${simPosition.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {simPosition.unrealizedPnl >= 0 ? '+' : ''}{simPosition.unrealizedPnl.toFixed(2)}$
-            </span>
-          )}
+          {(() => {
+            // Compute UPnL locally from the latest midPrice so it ticks in
+            // real-time with the orderbook (sub-100ms) instead of waiting for
+            // the backend's periodic markToMarket. Fallback to the
+            // server-side number if mid isn't ready yet.
+            const baseSize = simPosition.entryPrice > 0
+              ? simPosition.size / simPosition.entryPrice
+              : 0;
+            const upnl = (midPrice > 0 && baseSize > 0)
+              ? (simPosition.side === 'long'
+                  ? (midPrice - simPosition.entryPrice) * baseSize
+                  : (simPosition.entryPrice - midPrice) * baseSize)
+              : (simPosition.unrealizedPnl ?? null);
+            if (upnl == null) return null;
+            return (
+              <span className={`font-mono ${upnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {upnl >= 0 ? '+' : ''}{upnl.toFixed(2)}$
+              </span>
+            );
+          })()}
           {simPosition.stopLoss > 0 && (
             <span className="text-red-300/80">SL <span className="font-mono">{simPosition.stopLoss.toFixed(dp)}</span></span>
           )}
@@ -529,9 +592,10 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
           >CLOSE{simSymbolPositions.length > 1 ? ` ALL (${simSymbolPositions.length})` : ''}</button>
         </div>
       )}
+      </div>{/* end banner overlay stack */}
 
       {/* DOM Ladder — Tiger-style: liquidity heatmap (optional) | volume cluster | size | price | orders */}
-      <div ref={ladderRef} className="flex-1 overflow-hidden flex font-mono text-[11px] leading-none select-none">
+      <div ref={ladderRef} className="absolute inset-0 overflow-hidden flex font-mono text-[11px] leading-none select-none">
         {showHeatmap && orderbook && (bids.length > 0 || asks.length > 0) && (
           <div className="shrink-0 border-r border-[#1a1a2a]" style={{ width: HEATMAP_W }}>
             <HeatmapStrip
@@ -539,7 +603,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
               rowsRef={rowsRef}
               rowH={rowH}
               spreadRowH={spreadRowH}
-              windowMs={HEATMAP_WINDOW_MS}
+              windowMs={heatmapWindowMs}
             />
           </div>
         )}
@@ -592,7 +656,11 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
           let isTakeRow = false;
           if (simPosition) {
             const entry = simPosition.entryPrice;
-            const mark = simPosition.markPrice ?? entry;
+            // Use the local midPrice for mark — it ticks with the orderbook
+            // (sub-100ms) instead of waiting for the backend's periodic
+            // markToMarket to refresh `markPrice` on the position record.
+            // This makes the P&L band appear the instant a position opens.
+            const mark = midPrice > 0 ? midPrice : (simPosition.markPrice ?? entry);
             const top = Math.max(entry, mark);
             const bot = Math.min(entry, mark);
             if (top - bot >= tickSize * 0.5
@@ -770,6 +838,7 @@ export function OrderBookWidget({ exchange, symbol, isActive, widget }: OrderBoo
         })}
         </div>
       </div>
+      </div>{/* end relative wrapper */}
     </div>
   );
 }

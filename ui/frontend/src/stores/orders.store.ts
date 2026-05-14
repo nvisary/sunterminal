@@ -30,9 +30,25 @@ interface OrdersStore {
   cancel: (id: string) => Promise<void>;
   syncOpenOrders: (exchange: string, symbol: string) => Promise<void>;
   getBySymbol: (exchange: string, symbol: string) => LiveOrder[];
+  // Event-driven mutators applied from sim:events WS push. UI updates by
+  // delta, no wipe-and-replace.
+  applyOrderPlaced: (o: LiveOrder) => void;
+  applyOrderCanceled: (id: string) => void;
+  applyOrderFilled: (id: string) => void;
+  applyOrderRejected: (id: string, reason: string) => void;
 }
 
-const CANCEL_TOMBSTONE_TTL_MS = 10_000;
+// Safety GC ceiling: a tombstone is normally cleared the moment the server
+// confirms the cancel (stops returning the id). This TTL only kicks in when
+// the server NEVER confirms — e.g. the engine is dead — so we don't leak
+// memory across hours of session. Within a normal lifecycle, the positive
+// confirmation removes the tombstone within seconds.
+const CANCEL_TOMBSTONE_TTL_MS = 60 * 60_000;
+// Grace window for locally-placed orders that the backend hasn't echoed back
+// yet. The sim-engine reads `cmd:sim:trade:limit` from a Redis stream with
+// some lag, so the first poll after a click can legitimately return an empty
+// list. Don't wipe optimistic local orders within this window.
+const OPTIMISTIC_GRACE_MS = 4_000;
 
 function keyOf(o: { exchange: string; symbol: string }): string {
   return `${o.exchange}:${o.symbol}`;
@@ -160,12 +176,28 @@ export const useOrdersStore = create<OrdersStore>((set, get) => ({
         set((s) => {
           const m = new Map(s.orders);
           const tombstones = pruneTombstones(s.canceledTombstones);
-          // Drop sim orders for this symbol (we'll re-populate from server).
-          // Keep live orders untouched.
+          const now = Date.now();
+          // Build server-side set so we can decide what to keep vs. drop.
+          const serverIds = new Set<string>();
+          for (const o of list) {
+            if (o.exchange !== exchange || o.symbol !== symbol) continue;
+            if (o.id) serverIds.add(o.id);
+          }
+          // Drop local sim orders ONLY if either:
+          //   - server confirmed they're gone (filled/canceled), or
+          //   - they're old enough that the engine has had time to process.
+          // This preserves freshly-placed optimistic orders during the lag
+          // window between POST and the engine consuming the Redis stream.
           for (const [id, o] of m) {
-            if (o.mode === 'sim' && o.exchange === exchange && o.symbol === symbol) {
-              m.delete(id);
-            }
+            if (o.mode !== 'sim' || o.exchange !== exchange || o.symbol !== symbol) continue;
+            if (serverIds.has(id)) continue; // will be refreshed below
+            const fresh = now - o.createdAt < OPTIMISTIC_GRACE_MS;
+            if (!fresh) m.delete(id);
+          }
+          // Clear tombstones that the backend has stopped echoing — cancel is
+          // confirmed and we don't need to keep blocking that id.
+          for (const id of tombstones.keys()) {
+            if (!serverIds.has(id)) tombstones.delete(id);
           }
           for (const o of list) {
             if (o.exchange !== exchange || o.symbol !== symbol) continue;
@@ -188,8 +220,19 @@ export const useOrdersStore = create<OrdersStore>((set, get) => ({
         set((s) => {
           const m = new Map(s.orders);
           const tombstones = pruneTombstones(s.canceledTombstones);
+          const now = Date.now();
+          const serverIds = new Set<string>();
+          for (const o of list) {
+            if (o.id) serverIds.add(o.id);
+          }
           for (const [id, o] of m) {
-            if (o.mode === 'live' && o.exchange === exchange && o.symbol === symbol) m.delete(id);
+            if (o.mode !== 'live' || o.exchange !== exchange || o.symbol !== symbol) continue;
+            if (serverIds.has(id)) continue;
+            const fresh = now - o.createdAt < OPTIMISTIC_GRACE_MS;
+            if (!fresh) m.delete(id);
+          }
+          for (const id of tombstones.keys()) {
+            if (!serverIds.has(id)) tombstones.delete(id);
           }
           for (const o of list) {
             if (!o.id || !o.price || !o.amount) continue;
@@ -219,6 +262,36 @@ export const useOrdersStore = create<OrdersStore>((set, get) => ({
     }
     return out;
   },
+
+  applyOrderPlaced: (o) => set((s) => {
+    // Server-confirmed placement: clear the cancel-tombstone (it was for a
+    // different cycle), and replace whatever optimistic copy we had.
+    const tombstones = new Map(s.canceledTombstones);
+    tombstones.delete(o.id);
+    const m = new Map(s.orders);
+    m.set(o.id, { ...o, status: 'open' });
+    return { orders: m, canceledTombstones: tombstones };
+  }),
+
+  applyOrderCanceled: (id) => set((s) => {
+    const m = new Map(s.orders);
+    m.delete(id);
+    const tombstones = new Map(s.canceledTombstones);
+    tombstones.delete(id); // confirmed gone — no need to suppress further
+    return { orders: m, canceledTombstones: tombstones };
+  }),
+
+  applyOrderFilled: (id) => set((s) => {
+    const m = new Map(s.orders);
+    m.delete(id);
+    return { orders: m };
+  }),
+
+  applyOrderRejected: (id, _reason) => set((s) => {
+    const m = new Map(s.orders);
+    m.delete(id);
+    return { orders: m };
+  }),
 }));
 
 export { keyOf };

@@ -35,7 +35,7 @@ export class CmdConsumer {
   private handlers = new Map<CmdStream, CmdHandler>();
   private running = false;
   private consumerName: string;
-  private loops = new Map<CmdStream, Promise<void>>();
+  private loop: Promise<void> | null = null;
 
   constructor(bus: RedisBus) {
     this.bus = bus;
@@ -55,29 +55,35 @@ export class CmdConsumer {
       await this.bus.ensureConsumerGroup(stream, CmdConsumerGroup);
     }
 
-    // Spawn one loop per stream so slow handlers don't head-of-line block
-    for (const stream of CMD_STREAMS) {
-      this.loops.set(stream, this.consumeLoop(stream));
-    }
+    // Single XREADGROUP over all streams — Redis wakes the BLOCK as soon as
+    // any stream has new data. The previous design (one loop per stream)
+    // serialised 11 BLOCK commands on one connection in ioredis and caused
+    // multi-second delays before a click was processed.
+    this.loop = this.consumeLoop();
 
     logger.info({ streams: CMD_STREAMS.length, consumer: this.consumerName }, "CmdConsumer started");
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    // Loops exit on next tick when running=false
-    await Promise.allSettled(this.loops.values());
-    this.loops.clear();
+    if (this.loop) await this.loop.catch(() => {});
+    this.loop = null;
     logger.info("CmdConsumer stopped");
   }
 
-  private async consumeLoop(stream: CmdStream): Promise<void> {
-    const handler = this.handlers.get(stream);
+  private async consumeLoop(): Promise<void> {
     while (this.running) {
       try {
-        const messages = await this.bus.readGroup(CmdConsumerGroup, this.consumerName, stream, 10, 5_000);
+        const messages = await this.bus.readGroupMulti(
+          CmdConsumerGroup,
+          this.consumerName,
+          CMD_STREAMS,
+          10,
+          5_000,
+        );
         if (messages.length === 0) continue;
-        for (const { id, data } of messages) {
+        for (const { stream, id, data } of messages) {
+          const handler = this.handlers.get(stream as CmdStream);
           if (!handler) {
             logger.warn({ stream }, "No handler registered, dropping cmd");
             await this.bus.ack(stream, CmdConsumerGroup, id);
@@ -92,7 +98,7 @@ export class CmdConsumer {
         }
       } catch (err) {
         if (!this.running) return;
-        logger.error({ stream, err }, "Cmd consumer loop error");
+        logger.error({ err }, "Cmd consumer loop error");
         await new Promise((r) => setTimeout(r, 1_000));
       }
     }

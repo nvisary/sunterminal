@@ -3,6 +3,7 @@ import { API_BASE } from './lib/ws-client';
 import { TradingPage } from './pages/TradingPage';
 import { LogsPage } from './pages/LogsPage';
 import { wsClient } from './lib/ws-client';
+import { startSimEventStream } from './lib/sim-events';
 
 type Page = 'trading' | 'logs';
 
@@ -11,7 +12,13 @@ export default function App() {
 
   useEffect(() => {
     wsClient.connect();
-    return () => wsClient.disconnect();
+    // Subscribe to sim:events once: bootstraps orders/positions via REST, then
+    // applies push deltas. Removes the wipe-and-replace flicker from polling.
+    const stopSimEvents = startSimEventStream();
+    return () => {
+      stopSimEvents();
+      wsClient.disconnect();
+    };
   }, []);
 
   // Global keyboard shortcuts

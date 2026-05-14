@@ -64,6 +64,10 @@ interface SimStore {
   markPositionsClosing: (ids: string[]) => void;
   setDrawdown: (d: SimDrawdown) => void;
   setExposure: (e: SimExposure) => void;
+  // Event-driven mutators. Applied directly from sim:events WS messages —
+  // never wipe-and-replace, so no flicker even when the network is laggy.
+  upsertPosition: (p: SimPosition) => void;
+  removePosition: (id: string) => void;
 }
 
 const POSITION_TOMBSTONE_TTL_MS = 10_000;
@@ -103,4 +107,15 @@ export const useSimStore = create<SimStore>((set) => ({
   }),
   setDrawdown: (d) => set({ drawdown: d }),
   setExposure: (e) => set({ exposure: e }),
+  upsertPosition: (p) => set((s) => {
+    if (s.closedTombstones.has(p.id)) return s; // already closed locally
+    const idx = s.positions.findIndex((x) => x.id === p.id);
+    if (idx === -1) return { positions: [...s.positions, p] };
+    const next = s.positions.slice();
+    next[idx] = { ...next[idx], ...p };
+    return { positions: next };
+  }),
+  removePosition: (id) => set((s) => ({
+    positions: s.positions.filter((p) => p.id !== id),
+  })),
 }));

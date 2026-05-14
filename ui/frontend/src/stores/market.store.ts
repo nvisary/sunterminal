@@ -23,6 +23,12 @@ interface MarketStore {
   setOrderbook: (key: string, ob: OrderBook) => void;
 }
 
+// rAF-coalesced orderbook updates. Exchanges push 10-50 snapshots/sec; React
+// can't repaint faster than the monitor anyway, so we collapse multiple updates
+// per frame into one — keeps the DOM smooth and cuts wasted commits.
+const pendingObs = new Map<string, OrderBook>();
+let obRaf: number | null = null;
+
 export const useMarketStore = create<MarketStore>((set) => ({
   tickers: new Map(),
   orderbooks: new Map(),
@@ -32,10 +38,17 @@ export const useMarketStore = create<MarketStore>((set) => ({
       map.set(key, ticker);
       return { tickers: map };
     }),
-  setOrderbook: (key, ob) =>
-    set((state) => {
-      const map = new Map(state.orderbooks);
-      map.set(key, ob);
-      return { orderbooks: map };
-    }),
+  setOrderbook: (key, ob) => {
+    pendingObs.set(key, ob);
+    if (obRaf !== null) return;
+    obRaf = requestAnimationFrame(() => {
+      obRaf = null;
+      set((state) => {
+        const map = new Map(state.orderbooks);
+        for (const [k, v] of pendingObs) map.set(k, v);
+        pendingObs.clear();
+        return { orderbooks: map };
+      });
+    });
+  },
 }));

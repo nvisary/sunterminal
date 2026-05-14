@@ -11,6 +11,7 @@ import type {
   SimFillResult,
   SimOpenTradeRequest,
   SimOpenOrder,
+  SimEvent,
 } from "../types/sim.types.ts";
 import { TradeJournal } from "../journal/trade-journal.ts";
 import { SimAccount } from "./sim-account.ts";
@@ -68,8 +69,32 @@ export class SimEngine {
   private limitTimer: ReturnType<typeof setInterval> | null = null;
   private tradesLastIds = new Map<string, string>(); // streamKey -> last id
   private closingTrades = new Set<string>(); // trades currently being closed by SL/TP
+  // Per-order queue position tracked in-memory rather than in Redis. If we
+  // wrote queue updates back to the orders hash, a cancel (HDEL) racing with
+  // an in-flight HSET could resurrect a canceled order. In-memory state can't
+  // collide with HDEL — worst case we lose queue progress on restart, which
+  // re-seeds from the order's stored volumeAhead.
+  private queueAhead = new Map<string, number>();
   private callbacks: SimEngineCallbacks;
   private running = false;
+
+  /**
+   * Fan a state-change out to the UI event stream. Fire-and-forget — failures
+   * here mustn't block the actual state mutation. Snapshot endpoints remain
+   * authoritative if an event ever gets dropped.
+   */
+  private async publishEvent(event: SimEvent): Promise<void> {
+    try {
+      await this.bus.client.xadd(
+        SimStreamKeys.events,
+        "MAXLEN", "~", String(SimStreamMaxLen.events),
+        "*",
+        "data", JSON.stringify(event),
+      );
+    } catch (err) {
+      logger.warn({ err, type: event.type }, "publishEvent failed");
+    }
+  }
 
   constructor(
     bus: RedisBus,
@@ -255,7 +280,9 @@ export class SimEngine {
 
     // No existing position → just open
     if (!existing) {
-      return this.journal.recordOpen(orderState, { riskAmount });
+      const opened = await this.journal.recordOpen(orderState, { riskAmount });
+      await this.publishEvent({ type: "position-opened", at: Date.now(), position: opened });
+      return opened;
     }
 
     // Same direction → average up
@@ -271,7 +298,11 @@ export class SimEngine {
         ...(request.stopLoss != null ? { stopLoss: request.stopLoss } : {}),
         ...(request.takeProfit != null ? { takeProfit: request.takeProfit } : {}),
       });
-      return this.journal.getOpenTrade(existing.id) ?? null;
+      const updated = this.journal.getOpenTrade(existing.id) ?? null;
+      if (updated) {
+        await this.publishEvent({ type: "position-updated", at: Date.now(), position: updated });
+      }
+      return updated;
     }
 
     // Opposite direction → reduce / close / flip
@@ -295,7 +326,11 @@ export class SimEngine {
         symbol: existing.symbol, closedBase: fillBase, remainingBase: remainingNotional / existing.entryPrice,
         realized: realized.toFixed(4),
       }, "Sim partial close");
-      return this.journal.getOpenTrade(existing.id) ?? null;
+      const updated = this.journal.getOpenTrade(existing.id) ?? null;
+      if (updated) {
+        await this.publishEvent({ type: "position-updated", at: Date.now(), position: updated });
+      }
+      return updated;
     }
 
     // Full close: fill amount ~equals existing position
@@ -304,6 +339,13 @@ export class SimEngine {
       if (closed?.realizedPnl != null) {
         await this.account.applyRealizedPnl(closed.realizedPnl);
       }
+      await this.publishEvent({
+        type: "position-closed",
+        at: Date.now(),
+        positionId: existing.id,
+        exitPrice: fillPrice,
+        realizedPnl: closed?.realizedPnl ?? 0,
+      });
       return null;
     }
 
@@ -315,6 +357,13 @@ export class SimEngine {
     if (closed?.realizedPnl != null) {
       await this.account.applyRealizedPnl(closed.realizedPnl);
     }
+    await this.publishEvent({
+      type: "position-closed",
+      at: Date.now(),
+      positionId: existing.id,
+      exitPrice: fillPrice,
+      realizedPnl: closed?.realizedPnl ?? 0,
+    });
 
     const remainingBase = fillBase - existingBase;
     const remainderState: OrderState = {
@@ -325,7 +374,9 @@ export class SimEngine {
     logger.info({
       symbol: existing.symbol, closedBase: existingBase, openedBase: remainingBase, newSide: fillSide,
     }, "Sim flip");
-    return this.journal.recordOpen(remainderState, { riskAmount });
+    const flipOpened = await this.journal.recordOpen(remainderState, { riskAmount });
+    await this.publishEvent({ type: "position-opened", at: Date.now(), position: flipOpened });
+    return flipOpened;
   }
 
   async closeMarket(tradeId: string): Promise<{ orderState: OrderState; trade: TradeRecord | null }> {
@@ -368,21 +419,111 @@ export class SimEngine {
       await this.account.applyRealizedPnl(closed.realizedPnl);
     }
 
+    await this.publishEvent({
+      type: "position-closed",
+      at: Date.now(),
+      positionId: tradeId,
+      exitPrice: orderState.averagePrice,
+      realizedPnl: closed?.realizedPnl ?? 0,
+    });
+
     return { orderState, trade: closed };
   }
 
   // ─── Open limit order (Phase 2 hook) ─────────────────────────
 
   async placeLimit(order: SimOpenOrder): Promise<void> {
+    let ob: { bids?: Array<[number, number]>; asks?: Array<[number, number]> } | null = null;
+    try {
+      const obRaw = await this.bus.client.get(MdSnapshotKeys.orderbook(order.exchange, order.symbol));
+      if (obRaw) ob = JSON.parse(obRaw);
+    } catch (err) {
+      logger.debug({ err, orderId: order.id }, "could not read OB snapshot for placement");
+    }
+
+    const bestAsk = ob?.asks?.[0]?.[0];
+    const bestBid = ob?.bids?.[0]?.[0];
+    // A buy at-or-above the ask (or sell at-or-below the bid) crosses the
+    // spread — it's effectively a market order. Route it through the market
+    // path immediately instead of resting and waiting for the next matcher
+    // tick to fill it.
+    const marketable = order.side === "buy"
+      ? (bestAsk != null && order.price >= bestAsk)
+      : (bestBid != null && order.price <= bestBid);
+
+    if (marketable) {
+      // Marketable limit: emit placed + filled around the market path so the
+      // UI sees the same lifecycle as a true resting fill.
+      await this.publishEvent({
+        type: "order-placed",
+        at: Date.now(),
+        order: { ...order, volumeAhead: 0 },
+      });
+      const req: OrderRequest = {
+        exchange: order.exchange,
+        symbol: order.symbol,
+        side: order.side,
+        type: "market",
+        amount: order.amount,
+        strategy: "market",
+        reduceOnly: order.reduceOnly,
+        stopLoss: order.stopLoss,
+        takeProfit: order.takeProfit,
+        leverage: order.leverage ?? 1,
+      };
+      const { orderState, trade } = await this.openMarket(req, order.riskAmount ?? 0);
+      if (orderState.filledAmount > 0) {
+        await this.publishEvent({
+          type: "order-filled",
+          at: Date.now(),
+          orderId: order.id,
+          tradeId: trade?.id ?? "",
+          fillPrice: orderState.averagePrice,
+          fillAmount: orderState.filledAmount,
+        });
+      } else {
+        await this.publishEvent({
+          type: "order-rejected",
+          at: Date.now(),
+          orderId: order.id,
+          reason: "no_fill",
+        });
+      }
+      return;
+    }
+
+    // Resting limit — record visible volume ahead of us in the queue so we
+    // don't fill on the first matching print.
+    let volumeAhead = 0;
+    if (ob) {
+      const levels = order.side === "buy" ? ob.bids : ob.asks;
+      const eps = Math.max(order.price * 1e-8, 1e-9);
+      for (const [px, sz] of levels ?? []) {
+        if (Math.abs(px - order.price) <= eps) {
+          volumeAhead = sz;
+          break;
+        }
+      }
+      // Else: price sits between book levels (inside spread or beyond) —
+      // we'd be the only one at this level. volumeAhead stays 0.
+    }
+
+    const stored: SimOpenOrder = { ...order, volumeAhead };
     await this.bus.client.hset(
       SimHashKeys.openOrders(this.cfg.accountId),
       order.id,
-      JSON.stringify(order),
+      JSON.stringify(stored),
     );
+    this.queueAhead.set(order.id, volumeAhead);
+    await this.publishEvent({ type: "order-placed", at: Date.now(), order: stored });
   }
 
   async cancelLimit(orderId: string): Promise<boolean> {
+    this.queueAhead.delete(orderId);
     const removed = await this.bus.client.hdel(SimHashKeys.openOrders(this.cfg.accountId), orderId);
+    if (removed > 0) {
+      await this.publishEvent({ type: "order-canceled", at: Date.now(), orderId });
+    }
     return removed > 0;
   }
 
@@ -431,19 +572,38 @@ export class SimEngine {
           this.tradesLastIds.set(stream, id);
           const dataIdx = fields.indexOf("data");
           if (dataIdx === -1) continue;
-          let trade: { price?: number; amount?: number };
+          let trade: { price?: number; amount?: number; side?: "buy" | "sell" };
           try { trade = JSON.parse(fields[dataIdx + 1]!); } catch { continue; }
           if (!trade.price) continue;
 
           for (const order of symbolOrders) {
-            const fill = this.matcher.matchLimitAgainstTrade({
+            const cls = this.matcher.classifyTradeForLimit({
               side: order.side,
               limitPrice: order.price,
-              amount: order.amount,
               tradePrice: trade.price,
+              tradeSide: trade.side,
             });
-            if (!fill) continue;
+            if (cls === "none") continue;
 
+            let shouldFill = cls === "cross";
+            if (cls === "touch") {
+              // Prefer in-memory queue tracking. Fall back to the order's
+              // stored volumeAhead on first touch after a restart (when the
+              // map is empty).
+              const va = this.queueAhead.get(order.id) ?? order.volumeAhead ?? 0;
+              const tradeAmt = trade.amount ?? 0;
+              if (va <= 0) {
+                shouldFill = true;
+              } else if (va - tradeAmt <= 0) {
+                shouldFill = true;
+              } else {
+                this.queueAhead.set(order.id, va - tradeAmt);
+              }
+            }
+
+            if (!shouldFill) continue;
+
+            const fill = this.matcher.computeLimitFill(order.price, order.amount);
             await this.fillOpenLimit(order, fill);
             // Order is now closed, remove from list so we don't fill twice
             const idx = symbolOrders.indexOf(order);
@@ -457,6 +617,7 @@ export class SimEngine {
   private async fillOpenLimit(order: SimOpenOrder, fill: SimFillResult): Promise<void> {
     // Remove from open orders
     await this.bus.client.hdel(SimHashKeys.openOrders(this.cfg.accountId), order.id);
+    this.queueAhead.delete(order.id);
 
     // Build the OrderState/Request as if it filled at market and run it through
     // the same netting path the market opens use. This unifies behaviour: a
@@ -476,7 +637,15 @@ export class SimEngine {
       reduceOnly: order.reduceOnly,
     };
     const orderState = this.fillToOrderState(request, fill);
-    await this.applyFillWithNetting(request, orderState, order.riskAmount ?? 0);
+    const trade = await this.applyFillWithNetting(request, orderState, order.riskAmount ?? 0);
+    await this.publishEvent({
+      type: "order-filled",
+      at: Date.now(),
+      orderId: order.id,
+      tradeId: trade?.id ?? "",
+      fillPrice: fill.averagePrice,
+      fillAmount: fill.filledAmount,
+    });
   }
 
   /** Apply funding payments to all open perp positions for the configured account. */
