@@ -176,6 +176,33 @@ export interface MicrostructureData {
   ready: boolean;
 }
 
+// ─── Footprint ───────────────────────────────────────────────────
+
+export interface FootprintLevel {
+  price: number;
+  buy: number;
+  sell: number;
+}
+
+export interface FootprintCandle {
+  startMs: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  poc: number;
+  levels: FootprintLevel[];
+}
+
+export interface FootprintSnapshot {
+  exchange: string;
+  symbol: string;
+  timeframeMs: number;
+  tickSize: number;
+  candles: FootprintCandle[];
+  timestamp: number;
+}
+
 export interface LiquidityVoid {
   priceFrom: number;
   priceTo: number;
@@ -234,6 +261,15 @@ export interface RiskEngineConfig {
     imbalanceDepth: number;
     vpinBucketVolume: number; // Volume per bucket
     vpinBucketCount: number; // Window size in buckets
+  };
+  footprint: {
+    timeframeMs: number; // candle width
+    maxCandles: number; // ring buffer length
+    tickMultiplier: number; // price bucket = exchange tickSize * multiplier
+  };
+  heatmap: {
+    intervalMs: number; // snapshot cadence
+    windowMs: number; // rolling history length
   };
   alerts: {
     telegramBotToken?: string;

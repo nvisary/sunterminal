@@ -98,6 +98,40 @@ export function LiquidityHeatmapWidget({ exchange, symbol }: Props) {
       .then((data) => { if (data?.bids) latestObRef.current = data as OrderBook; })
       .catch(() => {});
 
+    // Hydrate the rolling history buffer from the risk-engine recorder so
+    // a freshly opened widget already has context — instead of waiting
+    // `windowMs` for the local sampler to fill up.
+    fetch(`${API_BASE}/api/snapshot/heatmap/${exchange}/${encodeURIComponent(symbol)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((payload: {
+        snapshots?: Array<{ t: number; bids: number[][]; asks: number[][] }>;
+      } | null) => {
+        if (!payload?.snapshots?.length) return;
+        const last = payload.snapshots[payload.snapshots.length - 1]!;
+        const lastBid = last.bids[0]?.[0] ?? 0;
+        const lastAsk = last.asks[0]?.[0] ?? lastBid;
+        const lastMid = (lastBid && lastAsk) ? (lastBid + lastAsk) / 2 : (lastBid || lastAsk);
+        const steps = getTickSteps(lastMid);
+        const t = steps[tickIdx ?? Math.min(2, steps.length - 1)]!;
+        const hydrated: Snapshot[] = payload.snapshots.map((s) => {
+          const bb = s.bids[0]?.[0] ?? 0;
+          const ba = s.asks[0]?.[0] ?? bb;
+          const mid = (bb && ba) ? (bb + ba) / 2 : (bb || ba);
+          return {
+            t: s.t,
+            bids: aggregate(s.bids, t),
+            asks: aggregate(s.asks, t),
+            mid, bestBid: bb, bestAsk: ba,
+          };
+        });
+        // Preserve any local snapshots that may have arrived already.
+        snapshotsRef.current = [...hydrated, ...snapshotsRef.current];
+        // Newest first → ensure sorted ascending by t.
+        snapshotsRef.current.sort((a, b) => a.t - b.t);
+        lastSnapTsRef.current = hydrated[hydrated.length - 1]?.t ?? 0;
+      })
+      .catch(() => {});
+
     const unOb = wsClient.subscribe<OrderBook>(`orderbook:${exchange}:${symbol}`, (ob) => {
       latestObRef.current = ob;
     });

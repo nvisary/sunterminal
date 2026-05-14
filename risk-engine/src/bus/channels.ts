@@ -44,6 +44,10 @@ export const RiskSnapshotKeys = {
     `risk:snapshot:zones:${exchange}:${symbol}`,
   microstructure: (exchange: string, symbol: string) =>
     `risk:snapshot:microstructure:${exchange}:${symbol}`,
+  footprint: (exchange: string, symbol: string) =>
+    `risk:snapshot:footprint:${exchange}:${symbol}`,
+  heatmapHistory: (exchange: string, symbol: string) =>
+    `risk:snapshot:heatmap:${exchange}:${symbol}`,
   activeAlerts: "risk:snapshot:active-alerts",
   peakEquity: "risk:state:peak-equity",
   dailyStartEquity: "risk:state:daily-start-equity",

@@ -219,6 +219,8 @@ export class RedisSubscriber {
     if (channel.startsWith("levels:")) return `risk:snapshot:${channel}`;
     if (channel.startsWith("microstructure:"))
       return `risk:snapshot:${channel}`;
+    if (channel.startsWith("footprint:")) return `risk:snapshot:${channel}`;
+    if (channel.startsWith("heatmap:")) return `risk:snapshot:${channel}`;
 
     logger.warn({ channel }, "Unknown channel mapping");
     return null;

@@ -19,6 +19,8 @@ import { ExposureTracker } from "./exposure/exposure-tracker.ts";
 import { VolatilityScanner } from "./volatility/volatility-scanner.ts";
 import { LevelDetector } from "./levels/level-detector.ts";
 import { MicrostructureScanner } from "./microstructure/microstructure-scanner.ts";
+import { FootprintScanner } from "./footprint/footprint-scanner.ts";
+import { HeatmapHistoryRecorder } from "./heatmap/heatmap-history.ts";
 import { AlertManager } from "./alerts/alert-manager.ts";
 import { CorrelationPlaceholder } from "./correlation/correlation-placeholder.ts";
 import pino from "pino";
@@ -36,6 +38,8 @@ export class RiskEngine {
   private volatility: VolatilityScanner;
   private levels: LevelDetector;
   private microstructure: MicrostructureScanner;
+  private footprint: FootprintScanner;
+  private heatmap: HeatmapHistoryRecorder;
   private alerts: AlertManager;
   private correlation: CorrelationPlaceholder;
   private cmdController: AbortController | null = null;
@@ -85,6 +89,18 @@ export class RiskEngine {
       config.exchanges,
       config.symbols,
     );
+    this.footprint = new FootprintScanner(
+      this.bus,
+      config.footprint,
+      config.exchanges,
+      config.symbols,
+    );
+    this.heatmap = new HeatmapHistoryRecorder(
+      this.bus,
+      config.heatmap,
+      config.exchanges,
+      config.symbols,
+    );
     this.alerts = new AlertManager(this.bus, config.alerts);
     this.correlation = new CorrelationPlaceholder();
 
@@ -92,10 +108,12 @@ export class RiskEngine {
     this.consumer.onTrade((ex, sym, data) => {
       this.volatility.onTrade(ex, sym, data);
       this.microstructure.onTrade(ex, sym, data);
+      this.footprint.onTrade(ex, sym, data);
     });
     this.consumer.onOrderbook((ex, sym, data) => {
       this.levels.onOrderbookUpdate(ex, sym, data);
       this.microstructure.onOrderbookUpdate(ex, sym, data);
+      this.heatmap.onOrderbook(ex, sym, data);
     });
 
     this.poller.onUpdate((snapshot) => {
@@ -119,6 +137,8 @@ export class RiskEngine {
     this.volatility.start();
     this.levels.start();
     this.microstructure.start();
+    this.footprint.start();
+    this.heatmap.start();
     await this.alerts.start();
     this.correlation.start();
     this.startCommandListener();
@@ -139,6 +159,8 @@ export class RiskEngine {
     this.volatility.stop();
     this.levels.stop();
     this.microstructure.stop();
+    this.footprint.stop();
+    this.heatmap.stop();
     this.alerts.stop();
     this.correlation.stop();
     await this.bus.disconnect();
@@ -226,11 +248,15 @@ export class RiskEngine {
       logger.info({ exchange: ex, symbol: sym }, "Dynamic risk subscription");
       await this.consumer.subscribe(ex, sym);
       this.microstructure.prepareSymbol(ex, sym);
+      this.footprint.prepareSymbol(ex, sym);
+      this.heatmap.prepareSymbol(ex, sym);
     });
 
     this.runCommandLoop(signal, "cmd:risk:unsubscribe", async (ex, sym) => {
       logger.info({ exchange: ex, symbol: sym }, "Dynamic risk unsubscription");
       this.microstructure.releaseSymbol(ex, sym);
+      this.footprint.releaseSymbol(ex, sym);
+      this.heatmap.releaseSymbol(ex, sym);
     });
   }
 

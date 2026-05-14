@@ -378,9 +378,9 @@ export function createTradeRoutes(redis: Redis) {
       return true;
     }
 
-    // GET /api/snapshot/{funding|volatility|levels|microstructure}/:exchange/:symbol
+    // GET /api/snapshot/{funding|volatility|levels|microstructure|footprint|heatmap}/:exchange/:symbol
     const snapMatch = path.match(
-      /^\/api\/snapshot\/(funding|volatility|levels|microstructure)\/([^/]+)\/(.+)$/,
+      /^\/api\/snapshot\/(funding|volatility|levels|microstructure|footprint|heatmap)\/([^/]+)\/(.+)$/,
     );
     if (snapMatch && method === "GET") {
       const kind = snapMatch[1]!;

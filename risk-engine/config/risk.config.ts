@@ -52,6 +52,17 @@ export const config: RiskEngineConfig = {
     vpinBucketCount: 30,
   },
 
+  footprint: {
+    timeframeMs: 60_000, // 1m candles
+    maxCandles: 60,
+    tickMultiplier: 1, // 1 × exchange tickSize
+  },
+
+  heatmap: {
+    intervalMs: 250, // sample at 4 Hz
+    windowMs: 5 * 60_000, // 5 min rolling history (~1200 snapshots)
+  },
+
   alerts: {
     telegramBotToken: env.TELEGRAM_BOT_TOKEN || undefined,
     telegramChatId: env.TELEGRAM_CHAT_ID || undefined,
